@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>รายงาน & สถิติ — Good Garage Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin-shell.css">
+<style>
+  .charts-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+  .export-btn {
+    display: inline-flex; align-items: center; gap: 6px; border: none; padding: 9px 16px;
+    border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+    background: linear-gradient(135deg, var(--accent-1), var(--accent-2)); color: #fff;
+  }
+  /* ✅ แก้บั๊กกราฟ "งานซ่อมรายเดือน" ที่เดิมโชว์เป็นแท่งทึบสี่เหลี่ยมเดียวเต็มการ์ด แทนที่
+     จะเป็นแท่งกราฟแยกทีละเดือน — สาเหตุคือ #repairsBars (.bar-row) และแท่ง .bar ที่สร้างจาก
+     JS ใน drawBars() ไม่มี CSS กำหนด layout เป็นของตัวเอง ต้องพึ่ง class ใน admin-shell.css
+     ซึ่งไม่ได้ตั้งให้เป็น flex row + ให้แต่ละแท่งมีความกว้างของตัวเอง ทำให้ <div class="bar">
+     แต่ละอันเรียงต่อกันแบบ block เต็มความกว้าง ซ้อนทับกันจนดูเหมือนแท่งเดียวเต็มพื้นที่
+     กำหนด CSS ผูกกับ id ตรงนี้ (specificity สูงกว่า class เฉยๆ) เพื่อบังคับ layout ให้ถูกต้อง
+     โดยไม่ต้องไปแก้ admin-shell.css ที่ใช้ร่วมกับหน้าอื่นๆ ด้วย ลดความเสี่ยงกระทบหน้าอื่น */
+  #repairsBars.bar-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    height: 130px;
+  }
+  #repairsBars .bar {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 48px;
+    border-radius: 6px 6px 0 0;
+    transition: height .25s ease;
+  }
+</style>
+</head>
+<body>
+  <aside class="sidebar" id="sidebarMount"></aside>
+
+  <div class="main-wrap">
+    <div class="appbar" id="appbarMount"></div>
+
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1>รายงานสถิติระบบ</h1>
+          <p>ภาพรวมสถิติของระบบแพลตฟอร์มค้นหาอู่ซ่อมรถ</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="pill-btn" id="btnDaily" onclick="setRange('daily')">รายวัน</button>
+          <button class="pill-btn active" id="btnMonthly" onclick="setRange('monthly')">รายเดือน</button>
+          <button class="pill-btn" id="btnYearly" onclick="setRange('yearly')">รายปี</button>
+          <button class="export-btn" onclick="exportReport()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+            Export Report
+          </button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="icon-badge badge-amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 17H4v-2a5 5 0 0 1 5-5h1M15 17h5v-2a5 5 0 0 0-5-5h-1M12 12V4m0 0-3 3m3-3 3 3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="value" id="statTotalRepairs">—</div>
+          <div class="label">คำขอซ่อมทั้งหมด</div>
+          <div class="trend" id="trendRepairs"></div>
+        </div>
+        <div class="stat-card">
+          <div class="icon-badge badge-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke-linecap="round"/></svg></div>
+          <div class="value" id="statTotalUsers">—</div>
+          <div class="label">ผู้ใช้ทั้งหมด</div>
+          <div class="trend" id="trendUsers"></div>
+        </div>
+        <div class="stat-card">
+          <div class="icon-badge badge-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke-linecap="round"/></svg></div>
+          <div class="value" id="statTotalRevenue">—</div>
+          <div class="label">รายได้รวม</div>
+          <div class="trend" id="trendRevenue"></div>
+        </div>
+        <div class="stat-card">
+          <div class="icon-badge badge-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21V9l9-6 9 6v12" stroke-linejoin="round"/><path d="M9 21v-7h6v7"/></svg></div>
+          <div class="value" id="statTotalGarages">—</div>
+          <div class="label">อู่ที่เปิดใช้งาน</div>
+          <div class="trend" id="trendGarages"></div>
+        </div>
+      </div>
+
+      <div class="charts-row-3">
+        <div class="chart-card">
+          <h3>งานซ่อมรายเดือน</h3>
+          <div class="bar-row" id="repairsBars" style="height:130px;"></div>
+          <div class="axis-labels" id="repairsAxis"></div>
+        </div>
+        <div class="chart-card">
+          <h3>ผู้ใช้ใหม่รายเดือน</h3>
+          <svg id="usersChart" viewBox="0 0 300 150" style="width:100%;height:150px;" preserveAspectRatio="none"></svg>
+          <div class="axis-labels" id="usersAxis"></div>
+        </div>
+        <div class="chart-card">
+          <h3>รายได้รายเดือน</h3>
+          <svg id="revenueChart" viewBox="0 0 300 150" style="width:100%;height:150px;" preserveAspectRatio="none"></svg>
+          <div class="axis-labels" id="revenueAxis"></div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <table>
+          <thead><tr><th>อู่ยอดนิยม</th><th>งานที่ทำ</th><th>คะแนน</th><th>รายได้รวม</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
+          <tbody id="topGaragesTbody"><tr><td colspan="6" class="empty-row">กำลังโหลด...</td></tr></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+<script src="admin-shell.js"></script>
+<script>
+  requireAdmin();
+  mountSidebar('reports');
+  mountAppbar();
+
+  const API_BASE = window.location.origin + '/api';
+  let currentRange = 'monthly';
+
+  const garageStatusMeta = {
+    approved: { label: 'เปิดใช้งาน', type: 'success' },
+    pending: { label: 'รออนุมัติ', type: 'warning' },
+    rejected: { label: 'ปฏิเสธแล้ว', type: 'danger' },
+    suspended: { label: 'ระงับ', type: 'danger' },
+  };
+
+  function fmtMoney(n) {
+    return '฿' + Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 0 });
+  }
+
+  function setRange(range) {
+    currentRange = range;
+    document.getElementById('btnDaily').classList.toggle('active', range === 'daily');
+    document.getElementById('btnMonthly').classList.toggle('active', range === 'monthly');
+    document.getElementById('btnYearly').classList.toggle('active', range === 'yearly');
+    loadReports();
+  }
+
+  function exportReport() {
+    const rows = [['ชื่ออู่', 'งานที่ทำ', 'คะแนน', 'รายได้รวม', 'สถานะ']];
+    document.querySelectorAll('#topGaragesTbody tr').forEach(tr => {
+      const cells = [...tr.querySelectorAll('td')].map(td => td.textContent.trim());
+      if (cells.length >= 5) rows.push(cells.slice(0, 5));
+    });
+    const csv = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `good-garage-report-${currentRange}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function monthLabel(bucket) {
+    const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+    if (bucket.length === 4) return bucket;
+    const m = Number(bucket.split('-')[1]) - 1;
+    return months[m] || bucket;
+  }
+
+  function drawBars(containerId, axisId, data, valueKey, color) {
+    const container = document.getElementById(containerId);
+    const axis = document.getElementById(axisId);
+    container.innerHTML = ''; axis.innerHTML = '';
+    if (!data || data.length === 0) {
+      container.innerHTML = `<div class="muted" style="font-size:12px;margin:auto;">ยังไม่มีข้อมูล</div>`;
+      return;
+    }
+    const maxVal = Math.max(...data.map(d => Number(d[valueKey])), 1);
+    container.innerHTML = data.map(d => {
+      const pct = Math.max((Number(d[valueKey]) / maxVal) * 100, 3);
+      return `<div class="bar" style="height:${pct}%;background:${color};" title="${d[valueKey]}"></div>`;
+    }).join('');
+    axis.innerHTML = data.map(d => `<span>${monthLabel(d.bucket)}</span>`).join('');
+  }
+
+  function drawAreaChart(svgId, axisId, data, valueKey, color) {
+    const svg = document.getElementById(svgId);
+    const axis = document.getElementById(axisId);
+    svg.innerHTML = ''; axis.innerHTML = '';
+    if (!data || data.length === 0) {
+      svg.innerHTML = '<text x="150" y="75" fill="#9ca3af" font-size="12" text-anchor="middle">ยังไม่มีข้อมูล</text>';
+      return;
+    }
+    const w = 300, h = 150, pad = 10;
+    const maxVal = Math.max(...data.map(d => Number(d[valueKey])), 1);
+    const stepX = data.length > 1 ? (w - pad * 2) / (data.length - 1) : 0;
+    const yFor = (val) => h - pad - ((val / maxVal) * (h - pad * 2));
+
+    const pts = data.map((d, i) => `${pad + stepX * i},${yFor(Number(d[valueKey]))}`).join(' ');
+    const areaPts = `${pad},${h - pad} ${pts} ${pad + stepX * (data.length - 1)},${h - pad}`;
+    const gradId = svgId + 'Grad';
+
+    svg.innerHTML = `
+      <defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity="0.35"/>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+      </linearGradient></defs>
+      <polygon points="${areaPts}" fill="url(#${gradId})"/>
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      ${data.map((d, i) => `<circle cx="${pad + stepX * i}" cy="${yFor(Number(d[valueKey]))}" r="2.5" fill="${color}"/>`).join('')}
+    `;
+    axis.innerHTML = data.map(d => `<span>${monthLabel(d.bucket)}</span>`).join('');
+  }
+
+  async function loadReports() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/reports?range=${currentRange}`);
+      const data = await res.json();
+      if (!data.success) return;
+
+      const d = data.data;
+      document.getElementById('statTotalRepairs').textContent = d.totals.totalRepairRequests ?? 0;
+      document.getElementById('statTotalUsers').textContent = d.totals.totalUsers ?? 0;
+      document.getElementById('statTotalGarages').textContent = d.totals.totalGarages ?? 0;
+
+      const tbody = document.getElementById('topGaragesTbody');
+      if (!d.topGarages || d.topGarages.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-row">ยังไม่มีข้อมูล</td></tr>';
+      } else {
+        tbody.innerHTML = d.topGarages.map(g => {
+          const meta = garageStatusMeta[g.status] || garageStatusMeta.approved;
+          const avatarHtml = g.avatar
+            ? `<img class="table-avatar" src="${g.avatar}" alt="">`
+            : `<span class="table-avatar-fallback">${escapeHtml((g.shop_name || '?').charAt(0))}</span>`;
+          return `
+            <tr>
+              <td>${avatarHtml}${escapeHtml(g.shop_name)}</td>
+              <td class="muted">${g.job_count} งาน</td>
+              <td style="color:var(--warning);font-weight:600;">★ ${g.avg_rating}</td>
+              <td class="muted">${fmtMoney(g.total_revenue)}</td>
+              <td>${badge(meta.label, meta.type)}</td>
+              <td class="actions">
+                <button class="icon-action-btn btn-blue" title="ดูรายละเอียด" onclick="location.href='garages.html'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </td>
+            </tr>`;
+        }).join('');
+      }
+
+      loadRevenueTotal();
+      drawBars('repairsBars', 'repairsAxis', d.trend, 'count', '#7c6cf0');
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function loadRevenueTotal() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/dashboard-stats`);
+      const data = await res.json();
+      if (!data.success) return;
+      document.getElementById('statTotalRevenue').textContent = fmtMoney(data.data.totalRevenue);
+      if (data.data.revenueGrowthPct > 0) document.getElementById('trendRevenue').innerHTML = `↗ เพิ่มขึ้น ${data.data.revenueGrowthPct}%`;
+      if (data.data.customerGrowthPct > 0) document.getElementById('trendUsers').innerHTML = `↗ เพิ่มขึ้น ${data.data.customerGrowthPct}%`;
+      if (data.data.requestGrowthPct > 0) document.getElementById('trendRepairs').innerHTML = `↗ เพิ่มขึ้น ${data.data.requestGrowthPct}%`;
+      if (data.data.garageGrowthPct > 0) document.getElementById('trendGarages').innerHTML = `↗ เพิ่มขึ้น ${data.data.garageGrowthPct}%`;
+    } catch (e) { /* ไม่ critical ถ้าโหลดไม่ได้ */ }
+  }
+
+  async function loadCharts() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/dashboard-charts`);
+      const data = await res.json();
+      if (!data.success) return;
+      drawAreaChart('usersChart', 'usersAxis', data.data.users, 'count', '#4f7cf6');
+      drawAreaChart('revenueChart', 'revenueAxis', data.data.revenue, 'total', '#10b981');
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  loadReports();
+  loadCharts();
+</script>
+</body>
+</html>

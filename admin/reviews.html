@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>รีวิว & ข้อร้องเรียน — Good Garage Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin-shell.css">
+<style>
+  .tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+  .stars { color: var(--warning); letter-spacing: 1px; }
+  .comment-cell { max-width: 280px; }
+</style>
+</head>
+<body>
+  <aside class="sidebar" id="sidebarMount"></aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>รีวิว & ข้อร้องเรียน</h1>
+        <p>ควบคุมคุณภาพเนื้อหา ซ่อน/ลบรีวิวไม่เหมาะสม และติดตามข้อร้องเรียน</p>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="pill-btn active" id="tabReviewsBtn" onclick="switchTab('reviews')">รีวิว (<span id="reviewCount">0</span>)</button>
+      <button class="pill-btn" id="tabComplaintsBtn" onclick="switchTab('complaints')">ข้อร้องเรียน (<span id="complaintCount">0</span>)</button>
+    </div>
+
+    <div class="table-card" id="reviewsPanel">
+      <table>
+        <thead>
+          <tr><th>ผู้รีวิว</th><th>อู่ซ่อม</th><th>คะแนน</th><th>ความคิดเห็น</th><th>อู่ตอบกลับ</th><th>สถานะ</th><th>การดำเนินการ</th></tr>
+        </thead>
+        <tbody id="reviewsTbody"><tr><td colspan="7" class="empty-row">กำลังโหลด...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="table-card" id="complaintsPanel" style="display:none;">
+      <table>
+        <thead>
+          <tr><th>ผู้แจ้ง</th><th>เรื่อง</th><th>อู่ที่เกี่ยวข้อง</th><th>สถานะ</th><th>การดำเนินการ</th></tr>
+        </thead>
+        <tbody id="complaintsTbody"><tr><td colspan="5" class="empty-row">กำลังโหลด...</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+
+<script src="admin-shell.js"></script>
+<script>
+  requireAdmin();
+  mountSidebar('reviews');
+
+  const API_BASE = window.location.origin + '/api';
+  let allReviews = [];
+  let allComplaints = [];
+
+  function switchTab(tab) {
+    document.getElementById('reviewsPanel').style.display = tab === 'reviews' ? 'block' : 'none';
+    document.getElementById('complaintsPanel').style.display = tab === 'complaints' ? 'block' : 'none';
+    document.getElementById('tabReviewsBtn').classList.toggle('active', tab === 'reviews');
+    document.getElementById('tabComplaintsBtn').classList.toggle('active', tab === 'complaints');
+  }
+
+  function renderReviews() {
+    document.getElementById('reviewCount').textContent = allReviews.length;
+    const tbody = document.getElementById('reviewsTbody');
+    if (allReviews.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-row">ยังไม่มีรีวิวในระบบ</td></tr>';
+      return;
+    }
+    tbody.innerHTML = allReviews.map(rv => {
+      const stars = '★'.repeat(rv.rating) + '☆'.repeat(5 - rv.rating);
+      const hidden = !!rv.hidden;
+      return `
+        <tr>
+          <td>${escapeHtml(rv.reviewer_name)}</td>
+          <td class="muted">${escapeHtml(rv.garage_name)}</td>
+          <td class="stars">${stars}</td>
+          <td class="comment-cell muted">${escapeHtml(rv.comment || '-')}</td>
+          <td class="muted" style="font-style:italic;">${rv.reply ? escapeHtml(rv.reply) : '— ยังไม่ตอบกลับ —'}</td>
+          <td>${badge(hidden ? 'ซ่อนอยู่' : 'แสดงอยู่', hidden ? 'danger' : 'success')}</td>
+          <td class="actions">
+            <button class="btn-mini btn-amber" onclick="toggleHidden(${rv.id}, ${!hidden})">${hidden ? 'แสดง' : 'ซ่อน'}</button>
+            <button class="btn-mini btn-red" onclick="removeReview(${rv.id})">ลบ</button>
+          </td>
+        </tr>`;
+    }).join('');
+  }
+
+  function renderComplaints() {
+    document.getElementById('complaintCount').textContent = allComplaints.filter(c => c.status !== 'resolved').length;
+    const tbody = document.getElementById('complaintsTbody');
+    if (allComplaints.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-row">
+        ยังไม่มีข้อร้องเรียนในระบบ — แอปฝั่งลูกค้ายังไม่มีฟีเจอร์ "แจ้งข้อร้องเรียน" แยกจากรีวิว (บอกได้ถ้าอยากให้เพิ่ม)
+      </td></tr>`;
+      return;
+    }
+    tbody.innerHTML = allComplaints.map(c => `
+      <tr>
+        <td>${escapeHtml(c.reporter_name || '-')}</td>
+        <td class="muted">${escapeHtml(c.subject)}</td>
+        <td class="muted">${escapeHtml(c.garage_name || '-')}</td>
+        <td>${badge(c.status === 'resolved' ? 'แก้ไขแล้ว' : 'รอดำเนินการ', c.status === 'resolved' ? 'success' : 'warning')}</td>
+        <td class="actions">
+          <button class="btn-mini btn-green" onclick="resolveComplaint(${c.id})">แก้ไขแล้ว</button>
+          <button class="btn-mini btn-red" onclick="removeComplaint(${c.id})">ลบ</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  async function loadReviews() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/reviews`);
+      const data = await res.json();
+      if (data.success) { allReviews = data.data.reviews; renderReviews(); }
+    } catch (e) {
+      document.getElementById('reviewsTbody').innerHTML = '<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ</td></tr>';
+    }
+  }
+
+  async function loadComplaints() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/complaints`);
+      const data = await res.json();
+      if (data.success) { allComplaints = data.data.complaints; renderComplaints(); }
+    } catch (e) {
+      allComplaints = [];
+      renderComplaints();
+    }
+  }
+
+  async function toggleHidden(id, hidden) {
+    const res = await fetch(`${API_BASE}/admin/reviews/${id}/hidden`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadReviews();
+  }
+
+  async function removeReview(id) {
+    if (!confirm('ยืนยันลบรีวิวนี้ถาวร?')) return;
+    const res = await fetch(`${API_BASE}/admin/reviews/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadReviews();
+  }
+
+  async function resolveComplaint(id) {
+    const res = await fetch(`${API_BASE}/admin/complaints/${id}/resolve`, { method: 'PUT' });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadComplaints();
+  }
+
+  async function removeComplaint(id) {
+    if (!confirm('ยืนยันลบข้อร้องเรียนนี้?')) return;
+    const res = await fetch(`${API_BASE}/admin/complaints/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadComplaints();
+  }
+
+  loadReviews();
+  loadComplaints();
+</script>
+</body>
+</html>

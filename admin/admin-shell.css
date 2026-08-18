@@ -1,0 +1,293 @@
+/* ============================================================
+ * ไฟล์: admin-shell.css
+ * ใช้ร่วมกันทุกหน้าใน admin/ (นอกจาก login.html ที่มีดีไซน์เฉพาะของตัวเอง)
+ * ✅ เปลี่ยนเป็นธีมสว่างให้ตรงกับต้นแบบ Figma (เดิมเป็นธีมมืดทั้งระบบ ไม่ตรงกับ
+ * ต้นแบบที่ออกแบบไว้ตั้งแต่แรก — sidebar ยังคงเข้มเหมือนเดิม แต่พื้นที่เนื้อหา
+ * เปลี่ยนเป็นขาว/เทาอ่อนตามต้นแบบ)
+ * ============================================================ */
+
+:root {
+  --bg-0: #f4f5f7;           /* พื้นเนื้อหาหลัก เทาอ่อน */
+  --panel: #ffffff;           /* การ์ด/ตาราง พื้นขาว */
+  --panel-2: #f4f5f7;         /* input/ช่องกรอก */
+  --border: #e5e7eb;
+  --accent-1: #7c6cf0;        /* ม่วง */
+  --accent-2: #4f7cf6;        /* น้ำเงิน */
+  --text-main: #111827;
+  --text-mute: #6b7280;
+  --text-faint: #9ca3af;
+  --success: #10b981;
+  --success-bg: #d1fae5;
+  --warning: #f59e0b;
+  --warning-bg: #fef3c7;
+  --danger: #ef4444;
+  --danger-bg: #fee2e2;
+  --info: #3b82f6;
+  --info-bg: #dbeafe;
+
+  /* ✅ sidebar มีชุดสีของตัวเอง แยกจาก content เพราะ sidebar ยังคงเข้มเสมอ
+     ไม่ว่าพื้นที่เนื้อหาจะเป็นธีมไหนก็ตาม */
+  --sidebar-bg: #161a2e;
+  --sidebar-border: rgba(255,255,255,0.08);
+  --sidebar-text: #ffffff;
+  --sidebar-text-mute: #9ca3af;
+  --sidebar-active-bg: rgba(124,108,240,0.18);
+  --sidebar-active-text: #c7d2fe;
+}
+
+/* ============================================================
+ * ✅ โหมดมืด — สลับด้วยปุ่มใน sidebar/appbar (เก็บค่าไว้ใน localStorage)
+ * sidebar ไม่เปลี่ยนเลยเพราะเข้มอยู่แล้วทั้ง 2 โหมด เปลี่ยนแค่พื้นที่เนื้อหา
+ * ============================================================ */
+[data-theme="dark"] {
+  --bg-0: #0c0a17;
+  --panel: #171430;
+  --panel-2: #1d1a3a;
+  --border: rgba(255,255,255,0.08);
+  --text-main: #f3f2fa;
+  --text-mute: #9791b8;
+  --text-faint: #6c6690;
+  --success-bg: rgba(16,185,129,0.16);
+  --warning-bg: rgba(245,158,11,0.16);
+  --danger-bg: rgba(239,68,68,0.16);
+  --info-bg: rgba(59,130,246,0.16);
+}
+[data-theme="dark"] .stat-card,
+[data-theme="dark"] .chart-card,
+[data-theme="dark"] .table-card,
+[data-theme="dark"] .appbar { box-shadow: none; }
+[data-theme="dark"] .toast.success { background: #16342a; color: #34d399; border-color: rgba(52,211,153,0.3); }
+[data-theme="dark"] .toast.error { background: #3a1c1c; color: #f87171; border-color: rgba(248,113,113,0.3); }
+[data-theme="dark"] .search-input,
+[data-theme="dark"] .rate-input,
+[data-theme="dark"] select.status-select { background: var(--panel-2); }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Noto Sans Thai', 'Inter', sans-serif;
+  background: var(--bg-0);
+  color: var(--text-main);
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ---------- Sidebar (เข้มเสมอ) ---------- */
+.sidebar {
+  width: 248px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  padding: 22px 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px 22px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+.sidebar-brand .icon {
+  width: 34px; height: 34px; border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.sidebar-brand .icon svg { width: 18px; height: 18px; }
+.sidebar-brand .label { font-size: 13.5px; font-weight: 700; line-height: 1.2; color: var(--sidebar-text); }
+.sidebar-brand .label small { display: block; font-size: 10.5px; font-weight: 500; color: var(--sidebar-text-mute); margin-top: 2px; }
+
+nav.menu { flex: 1; overflow-y: auto; }
+.menu-group { margin-bottom: 4px; }
+.menu-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--sidebar-text-mute); padding: 14px 12px 6px; text-transform: uppercase;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-radius: 10px; font-size: 13.5px; color: var(--sidebar-text-mute);
+  text-decoration: none; cursor: pointer; transition: background .12s, color .12s;
+}
+.menu-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+.menu-item:hover { background: rgba(255,255,255,0.06); color: var(--sidebar-text); }
+.menu-item.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text); font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(124,108,240,0.35);
+}
+
+.sidebar-footer { border-top: 1px solid var(--sidebar-border); padding-top: 12px; margin-top: 8px; }
+.admin-chip { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; }
+.admin-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent-1));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; flex-shrink: 0; color: #fff;
+}
+.admin-info { min-width: 0; }
+.admin-info .name { font-size: 12.5px; font-weight: 600; color: var(--sidebar-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.admin-info .email { font-size: 11px; color: var(--sidebar-text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.logout-btn {
+  width: 100%; margin-top: 8px; background: rgba(248,113,113,0.1);
+  border: 1px solid rgba(248,113,113,0.25); color: #f87171;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; padding: 8px;
+  border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.logout-btn:hover { background: rgba(248,113,113,0.18); }
+
+/* ---------- Top app bar (ตรงกับต้นแบบ Figma) ---------- */
+.appbar {
+  height: 64px; background: var(--panel); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 28px;
+  position: sticky; top: 0; z-index: 5;
+}
+.appbar .title { font-weight: 700; color: var(--text-main); font-size: 16px; }
+.appbar .actions { display: flex; align-items: center; gap: 18px; }
+.appbar .icon-btn {
+  width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--bg-0);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-mute);
+  position: relative;
+}
+.appbar .icon-btn svg { width: 17px; height: 17px; }
+.appbar .icon-btn .dot {
+  position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger); border: 1.5px solid var(--panel);
+}
+.appbar .avatar-chip { display: flex; align-items: center; gap: 8px; }
+.appbar .avatar-chip .circle {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
+}
+.appbar .avatar-chip .name { font-size: 13px; color: var(--text-main); font-weight: 600; }
+
+/* ---------- Main ---------- */
+.main-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main { flex: 1; padding: 26px 28px 40px; max-width: 1400px; }
+.topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.topbar h1 { font-size: 20px; margin: 0 0 4px; font-weight: 800; color: var(--text-main); }
+.topbar p { margin: 0; font-size: 13px; color: var(--text-mute); }
+
+.search-input {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; font-family: inherit; font-size: 13px; color: var(--text-main);
+  min-width: 240px; outline: none;
+}
+.search-input:focus { border-color: var(--accent-1); }
+.search-input::placeholder { color: var(--text-faint); }
+
+/* ---------- Stat grid (การ์ดสถิติ พร้อมไอคอนสี + trend) ---------- */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.stat-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.stat-card .icon-badge {
+  width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center;
+  justify-content: center; margin-bottom: 12px;
+}
+.stat-card .icon-badge svg { width: 19px; height: 19px; }
+.badge-purple { background: rgba(124,108,240,0.14); color: var(--accent-1); }
+.badge-blue { background: rgba(79,124,246,0.14); color: var(--accent-2); }
+.badge-green { background: var(--success-bg); color: var(--success); }
+.badge-amber { background: var(--warning-bg); color: var(--warning); }
+.stat-card .value { font-family: 'Inter', sans-serif; font-size: 24px; font-weight: 800; line-height: 1; margin-bottom: 6px; color: var(--text-main); }
+.stat-card .label { font-size: 12.5px; color: var(--text-mute); }
+.stat-card .trend { font-size: 11.5px; color: var(--success); margin-top: 6px; font-weight: 600; }
+.stat-card .trend.down { color: var(--danger); }
+
+/* ---------- Chart cards ---------- */
+.chart-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.chart-card h3 { margin: 0 0 14px; font-size: 14px; font-weight: 700; color: var(--text-main); }
+.axis-labels { display: flex; justify-content: space-between; color: var(--text-faint); font-size: 11px; margin-top: 6px; padding: 0 4px; }
+.chart-legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-mute); margin-bottom: 10px; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* ---------- Table ---------- */
+.table-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 6px; overflow-x: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
+thead th {
+  text-align: left; padding: 12px 14px; color: var(--text-faint);
+  font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+tbody tr { border-top: 1px solid var(--border); }
+tbody tr:hover { background: rgba(0,0,0,0.015); }
+tbody td { padding: 12px 14px; vertical-align: middle; }
+.muted { color: var(--text-mute); }
+.mono { font-family: 'Inter', sans-serif; color: var(--accent-1); font-weight: 600; }
+.empty-row { text-align: center; padding: 40px 12px !important; color: var(--text-faint); }
+.table-avatar {
+  width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: var(--bg-0);
+  display: inline-block; vertical-align: middle; margin-right: 8px;
+}
+.table-avatar-fallback {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--info-bg); color: var(--info);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+  vertical-align: middle; margin-right: 8px;
+}
+
+/* ---------- Badge ---------- */
+.badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+.badge-success { background: var(--success-bg); color: var(--success); }
+.badge-warning { background: var(--warning-bg); color: var(--warning); }
+.badge-danger { background: var(--danger-bg); color: var(--danger); }
+.badge-info { background: var(--info-bg); color: var(--info); }
+
+/* ---------- Buttons ---------- */
+.actions { white-space: nowrap; }
+.btn-mini {
+  border: none; padding: 6px 11px; border-radius: 7px; font-size: 12px; font-weight: 600;
+  cursor: pointer; margin-right: 6px; font-family: inherit;
+}
+.btn-mini:last-child { margin-right: 0; }
+.btn-green { background: var(--success-bg); color: var(--success); }
+.btn-green:hover { background: #a7f3d0; }
+.btn-red { background: var(--danger-bg); color: var(--danger); }
+.btn-red:hover { background: #fecaca; }
+.btn-amber { background: var(--warning-bg); color: var(--warning); }
+.btn-amber:hover { background: #fde68a; }
+.btn-blue { background: var(--info-bg); color: var(--info); }
+.btn-blue:hover { background: #bfdbfe; }
+
+.icon-action-btn {
+  width: 28px; height: 28px; border-radius: 7px; border: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; margin-right: 4px;
+}
+.icon-action-btn svg { width: 14px; height: 14px; }
+
+.pill-btn {
+  border: 1px solid var(--border); background: var(--panel); color: var(--text-mute);
+  font-family: inherit; font-size: 13px; font-weight: 600; padding: 8px 16px;
+  border-radius: 10px; cursor: pointer;
+}
+.pill-btn.active { background: linear-gradient(135deg, var(--accent-1), var(--accent-2)); color: #fff; border-color: transparent; }
+
+/* ---------- Toast ---------- */
+#toastBox {
+  position: fixed; bottom: 24px; right: 24px; z-index: 999;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  padding: 12px 16px; border-radius: 10px; font-size: 13px; font-weight: 500;
+  box-shadow: 0 12px 28px -8px rgba(0,0,0,0.25);
+  animation: toast-in .2s ease-out;
+  max-width: 320px;
+}
+.toast.success { background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; }
+.toast.error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.panel-placeholder {
+  background: var(--panel); border: 1px dashed var(--border); border-radius: 14px;
+  padding: 40px 24px; text-align: center; color: var(--text-faint); font-size: 13px;
+}
+.panel-placeholder strong { display: block; color: var(--text-mute); font-size: 14px; margin-bottom: 6px; }
+
+@media (max-width: 860px) {
+  .sidebar { display: none; }
+  .main { padding: 20px; }
+}

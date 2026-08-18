@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>งานซ่อมทั้งหมด — Good Garage Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin-shell.css">
+<style>
+  select.status-select {
+    background: var(--panel-2); color: var(--text-main); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 8px; font-family: inherit; font-size: 12px; margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+  <aside class="sidebar" id="sidebarMount"></aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>งานซ่อมทั้งหมด</h1>
+        <p>ดูภาพรวมงานซ่อมทุกอู่ และปรับสถานะตรงได้กรณีเกิดข้อผิดพลาด (ค้างสถานะจากบั๊ก ฯลฯ)</p>
+      </div>
+      <input id="searchInput" class="search-input" placeholder="ค้นหาลูกค้า, อู่, #ID...">
+    </div>
+
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Repair ID</th><th>ลูกค้า</th><th>อู่ซ่อม</th><th>ประเภทงาน</th><th>สถานะ</th><th>วันที่แจ้ง</th><th>การดำเนินการ</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="7" class="empty-row">กำลังโหลด...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+<script src="admin-shell.js"></script>
+<script>
+  requireAdmin();
+  mountSidebar('repairs');
+
+  const API_BASE = window.location.origin + '/api';
+  let allRepairs = [];
+
+  const statusMeta = {
+    pending: { label: 'รอดำเนินการ', type: 'warning' },
+    accepted: { label: 'อู่รับงานแล้ว', type: 'info' },
+    quoted: { label: 'เสนอราคาแล้ว', type: 'warning' },
+    confirmed: { label: 'ยืนยันใบเสนอราคา', type: 'success' },
+    assigned: { label: 'มอบหมายช่างแล้ว', type: 'info' },
+    checking: { label: 'ช่างกำลังเดินทาง', type: 'info' },
+    in_progress: { label: 'กำลังซ่อม', type: 'info' },
+    waiting_parts: { label: 'รอรับอะไหล่', type: 'warning' },
+    completed: { label: 'เสร็จสิ้น', type: 'success' },
+    rejected: { label: 'อู่ปฏิเสธ', type: 'danger' },
+  };
+
+  const vehicleLabel = { sedan: 'รถเก๋ง', suv: 'SUV', pickup: 'กระบะ' };
+
+  function statusOptions(current) {
+    return Object.keys(statusMeta).map(s =>
+      `<option value="${s}" ${s === current ? 'selected' : ''}>${statusMeta[s].label}</option>`
+    ).join('');
+  }
+
+  function render() {
+    const q = document.getElementById('searchInput').value.trim().toLowerCase();
+    const rows = allRepairs.filter(r =>
+      (r.customer_name + r.garage_name + '#req' + r.id).toLowerCase().includes(q)
+    );
+
+    const tbody = document.getElementById('tbody');
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-row">ไม่พบงานซ่อมที่ค้นหา</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = rows.map(r => {
+      const meta = statusMeta[r.status] || { label: r.status, type: 'info' };
+      return `
+        <tr>
+          <td class="mono">#REQ${String(r.id).padStart(6, '0')}</td>
+          <td>${escapeHtml(r.customer_name || '-')}</td>
+          <td class="muted">${escapeHtml(r.garage_name || '-')}</td>
+          <td class="muted">${escapeHtml(r.problem_category || '-')} · ${vehicleLabel[r.vehicle_type] || '-'}</td>
+          <td>${badge(meta.label, meta.type)}</td>
+          <td class="muted">${formatDate(r.created_at)}</td>
+          <td class="actions">
+            <select class="status-select" onchange="setStatus(${r.id}, this.value)">${statusOptions(r.status)}</select>
+            <button class="btn-mini btn-red" onclick="removeRepair(${r.id})">ลบ</button>
+          </td>
+        </tr>`;
+    }).join('');
+  }
+
+  async function loadRepairs() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/repairs`);
+      const data = await res.json();
+      if (data.success) {
+        allRepairs = data.data.repairs;
+        render();
+      }
+    } catch (e) {
+      document.getElementById('tbody').innerHTML = '<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ</td></tr>';
+    }
+  }
+
+  async function setStatus(id, status) {
+    const res = await fetch(`${API_BASE}/admin/repairs/${id}/status`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadRepairs();
+  }
+
+  async function removeRepair(id) {
+    if (!confirm('ยืนยันลบงานซ่อมนี้? การกระทำนี้ย้อนกลับไม่ได้')) return;
+    const res = await fetch(`${API_BASE}/admin/repairs/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadRepairs();
+  }
+
+  document.getElementById('searchInput').addEventListener('input', render);
+  loadRepairs();
+</script>
+</body>
+</html>

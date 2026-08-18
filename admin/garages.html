@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>จัดการอู่ซ่อมรถ — Good Garage Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin-shell.css">
+</head>
+<body>
+  <aside class="sidebar" id="sidebarMount"></aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>อู่ซ่อมรถ</h1>
+        <p>อนุมัติการสมัคร จัดการสถานะ และดูอันดับอู่ตามคะแนนรีวิว</p>
+      </div>
+      <input id="searchInput" class="search-input" placeholder="ค้นหาอู่, เจ้าของ...">
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="value" id="sumTotal">—</div><div class="label">อู่ทั้งหมด</div></div>
+      <div class="stat-card"><div class="value" id="sumPending" style="color:var(--warning)">—</div><div class="label">รออนุมัติ</div></div>
+      <div class="stat-card"><div class="value" id="sumApproved" style="color:var(--success)">—</div><div class="label">เปิดใช้งาน</div></div>
+      <div class="stat-card"><div class="value" id="sumSuspended" style="color:var(--danger)">—</div><div class="label">ระงับ/ปฏิเสธ</div></div>
+    </div>
+
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>อันดับ</th><th>ชื่ออู่</th><th>เจ้าของ</th><th>งานที่ทำ</th><th>คะแนน</th><th>สถานะ</th><th>การดำเนินการ</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="7" class="empty-row">กำลังโหลด...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+<script src="admin-shell.js"></script>
+<script>
+  requireAdmin();
+  mountSidebar('garages');
+
+  const API_BASE = window.location.origin + '/api';
+  let allGarages = [];
+
+  const statusMeta = {
+    pending: { label: 'รออนุมัติ', type: 'warning' },
+    approved: { label: 'เปิดใช้งาน', type: 'success' },
+    rejected: { label: 'ปฏิเสธแล้ว', type: 'danger' },
+    suspended: { label: 'ระงับ', type: 'danger' },
+  };
+
+  function render() {
+    const q = document.getElementById('searchInput').value.trim().toLowerCase();
+    // เรียงตามคะแนนอยู่แล้วจาก backend — คำนวณอันดับจากลำดับที่ได้มา (ข้อ 1.3.4.7)
+    const rows = allGarages
+      .map((g, i) => ({ ...g, rank: i + 1 }))
+      .filter(g => (g.shop_name + g.owner_name).toLowerCase().includes(q));
+
+    document.getElementById('sumTotal').textContent = allGarages.length;
+    document.getElementById('sumPending').textContent = allGarages.filter(g => g.garage_status === 'pending').length;
+    document.getElementById('sumApproved').textContent = allGarages.filter(g => g.garage_status === 'approved' || !g.garage_status).length;
+    document.getElementById('sumSuspended').textContent = allGarages.filter(g => ['rejected', 'suspended'].includes(g.garage_status)).length;
+
+    const tbody = document.getElementById('tbody');
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-row">ไม่พบอู่ที่ค้นหา</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = rows.map(g => {
+      const status = g.garage_status || 'approved';
+      const meta = statusMeta[status] || statusMeta.approved;
+      const isPending = status === 'pending';
+
+      let actionsHtml = '';
+      if (isPending) {
+        actionsHtml = `
+          <button class="btn-mini btn-green" onclick="setStatus(${g.id}, 'approved')">อนุมัติ</button>
+          <button class="btn-mini btn-red" onclick="setStatus(${g.id}, 'rejected')">ปฏิเสธ</button>`;
+      } else if (status === 'suspended' || status === 'rejected') {
+        actionsHtml = `<button class="btn-mini btn-green" onclick="setStatus(${g.id}, 'approved')">เปิดใช้งานอีกครั้ง</button>`;
+      } else {
+        actionsHtml = `<button class="btn-mini btn-amber" onclick="setStatus(${g.id}, 'suspended')">ระงับ</button>`;
+      }
+
+      return `
+        <tr>
+          <td class="mono">#${g.rank}</td>
+          <td>${escapeHtml(g.shop_name || '-')}</td>
+          <td class="muted">${escapeHtml(g.owner_name || '-')}</td>
+          <td class="muted">${g.job_count} งาน</td>
+          <td style="color:var(--warning);font-weight:600;">★ ${g.avg_rating} <span class="muted" style="font-weight:400;">(${g.review_count})</span></td>
+          <td>${badge(meta.label, meta.type)}</td>
+          <td class="actions">${actionsHtml}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  async function loadGarages() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/garages`);
+      const data = await res.json();
+      if (data.success) {
+        allGarages = data.data.garages;
+        render();
+      }
+    } catch (e) {
+      document.getElementById('tbody').innerHTML = '<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ</td></tr>';
+    }
+  }
+
+  async function setStatus(id, status) {
+    const res = await fetch(`${API_BASE}/admin/garages/${id}/status`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadGarages();
+  }
+
+  document.getElementById('searchInput').addEventListener('input', render);
+  loadGarages();
+</script>
+</body>
+</html>

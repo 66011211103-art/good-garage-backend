@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>จัดการผู้ใช้งาน — Good Garage Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin-shell.css">
+</head>
+<body>
+  <aside class="sidebar" id="sidebarMount"></aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>บัญชีผู้ใช้งาน</h1>
+        <p>จัดการบัญชีลูกค้า อู่ซ่อม ช่าง และผู้ดูแลระบบทั้งหมด</p>
+      </div>
+      <input id="searchInput" class="search-input" placeholder="ค้นหาชื่อ, อีเมล...">
+    </div>
+
+    <div class="stat-grid" id="summaryGrid">
+      <div class="stat-card"><div class="value" id="sumTotal">—</div><div class="label">ผู้ใช้ทั้งหมด</div></div>
+      <div class="stat-card"><div class="value" id="sumCustomer">—</div><div class="label">ลูกค้า</div></div>
+      <div class="stat-card"><div class="value" id="sumGarage">—</div><div class="label">เจ้าของอู่</div></div>
+      <div class="stat-card"><div class="value" id="sumSuspended" style="color:var(--danger)">—</div><div class="label">ถูกระงับ</div></div>
+    </div>
+
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>ชื่อ</th><th>อีเมล</th><th>บทบาท</th><th>สถานะ</th><th>วันที่สมัคร</th><th>การดำเนินการ</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="7" class="empty-row">กำลังโหลด...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+<script src="admin-shell.js"></script>
+<script>
+  requireAdmin();
+  mountSidebar('users');
+
+  const API_BASE = window.location.origin + '/api';
+  let allUsers = [];
+
+  const roleLabel = { customer: 'ลูกค้า', repair: 'เจ้าของอู่', technician: 'ช่าง', admin: 'ผู้ดูแลระบบ' };
+
+  function render() {
+    const q = document.getElementById('searchInput').value.trim().toLowerCase();
+    const rows = allUsers.filter(u =>
+      (u.display_name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
+    );
+
+    document.getElementById('sumTotal').textContent = allUsers.length;
+    document.getElementById('sumCustomer').textContent = allUsers.filter(u => u.user_type === 'customer').length;
+    document.getElementById('sumGarage').textContent = allUsers.filter(u => u.user_type === 'repair').length;
+    document.getElementById('sumSuspended').textContent = allUsers.filter(u => u.status === 'suspended').length;
+
+    const tbody = document.getElementById('tbody');
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-row">ไม่พบผู้ใช้ที่ค้นหา</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = rows.map(u => {
+      const suspended = u.status === 'suspended';
+      return `
+        <tr>
+          <td class="mono">#${u.id}</td>
+          <td>${escapeHtml(u.display_name || '-')}</td>
+          <td class="muted">${escapeHtml(u.email)}</td>
+          <td>${roleLabel[u.user_type] || u.user_type}</td>
+          <td>${badge(suspended ? 'ระงับ' : 'ใช้งาน', suspended ? 'danger' : 'success')}</td>
+          <td class="muted">${formatDate(u.created_at)}</td>
+          <td class="actions">
+            <button class="btn-mini btn-amber" onclick="toggleStatus(${u.id}, '${suspended ? 'active' : 'suspended'}')">${suspended ? 'ปลดระงับ' : 'ระงับ'}</button>
+            <button class="btn-mini btn-red" onclick="removeUser(${u.id})">ลบ</button>
+          </td>
+        </tr>`;
+    }).join('');
+  }
+
+  async function loadUsers() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/users`);
+      const data = await res.json();
+      if (data.success) {
+        allUsers = data.data.users;
+        render();
+      }
+    } catch (e) {
+      document.getElementById('tbody').innerHTML = '<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ — เชื่อมต่อเซิร์ฟเวอร์ไม่ได้</td></tr>';
+    }
+  }
+
+  async function toggleStatus(id, newStatus) {
+    const res = await fetch(`${API_BASE}/admin/users/${id}/status`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadUsers();
+  }
+
+  async function removeUser(id) {
+    if (!confirm('ยืนยันลบบัญชีนี้ถาวร? การกระทำนี้ย้อนกลับไม่ได้')) return;
+    const res = await fetch(`${API_BASE}/admin/users/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadUsers();
+  }
+
+  document.getElementById('searchInput').addEventListener('input', render);
+  loadUsers();
+</script>
+</body>
+</html>

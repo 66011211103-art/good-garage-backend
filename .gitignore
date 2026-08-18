@@ -1,0 +1,11 @@
+# ✅ เพิ่มไฟล์นี้เพราะโฟลเดอร์ backend เดิมไม่มี .gitignore เลย — ตรวจแล้วว่า .env ยังไม่เคย
+# ถูก commit เข้า git (git ls-files ไม่เจอ) แต่ก็ไม่มีอะไรกันไว้ ถ้าเผลอ git add . วันไหน
+# ไฟล์ .env ที่มีรหัสผ่านอีเมล (SMTP_PASS) และตอนนี้มี DATABASE_URL ของ Supabase ด้วย
+# จะหลุดเข้า git ทันที — ควรมีไฟล์นี้ไว้กันไว้ตั้งแต่ตอนนี้
+
+node_modules/
+.env
+.env.local
+.DS_Store
+uploads/
+*.log

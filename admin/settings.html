@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ตั้งค่าระบบ — Good Garage Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin-shell.css">
+<style>
+  .settings-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; margin-bottom: 20px; }
+  .settings-card h3 { margin: 0 0 4px; font-size: 15px; }
+  .settings-card .desc { font-size: 13px; color: var(--text-mute); margin: 0 0 16px; }
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 560px; }
+  .field label { display: block; font-size: 12.5px; color: var(--text-mute); margin-bottom: 6px; }
+  .field input, .field select {
+    width: 100%; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; font-family: inherit; font-size: 13px; color: var(--text-main);
+  }
+  .field select { appearance: none; cursor: pointer; }
+</style>
+</head>
+<body>
+  <aside class="sidebar" id="sidebarMount"></aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>ตั้งค่าระบบ</h1>
+        <p>ข้อมูลทั่วไปของแพลตฟอร์ม</p>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h3>ตั้งค่าทั่วไป</h3>
+      <p class="desc">ข้อมูลที่แสดงในระบบ Admin Panel</p>
+      <div class="field-grid">
+        <div class="field"><label>ชื่อระบบ</label><input value="Good Garage Admin Platform" readonly></div>
+        <div class="field"><label>อีเมลติดต่อฝ่ายสนับสนุน</label><input value="support@goodgarage.com" readonly></div>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h3>บัญชีรับเงินของแพลตฟอร์ม</h3>
+      <p class="desc">
+        เลขบัญชีนี้จะแสดงให้อู่เห็นตอนแจ้งเติมเงินเข้า Wallet (หน้า "Wallet ของอู่" ในแอป) —
+        <strong style="color:var(--danger);">ต้องตั้งค่าให้ถูกต้องก่อนระบบ Wallet จะใช้งานได้จริง</strong>
+        ไม่งั้นอู่จะไม่รู้ว่าต้องโอนเงินไปที่ไหน
+      </p>
+      <div class="field-grid" id="bankFields">
+        <div class="field">
+          <label>ธนาคาร</label>
+          <select id="platformBankName">
+            <option value="">เลือกธนาคาร</option>
+            <option value="ธนาคารกสิกรไทย">ธนาคารกสิกรไทย</option>
+            <option value="ธนาคารไทยพาณิชย์">ธนาคารไทยพาณิชย์</option>
+            <option value="ธนาคารกรุงเทพ">ธนาคารกรุงเทพ</option>
+            <option value="ธนาคารกรุงไทย">ธนาคารกรุงไทย</option>
+            <option value="ธนาคารกรุงศรีอยุธยา">ธนาคารกรุงศรีอยุธยา</option>
+            <option value="ธนาคารทหารไทยธนชาต">ธนาคารทหารไทยธนชาต</option>
+            <option value="ธนาคารออมสิน">ธนาคารออมสิน</option>
+            <option value="ธนาคารเพื่อการเกษตรและสหกรณ์การเกษตร">ธนาคารเพื่อการเกษตรและสหกรณ์การเกษตร</option>
+            <option value="ธนาคารซีไอเอ็มบีไทย">ธนาคารซีไอเอ็มบีไทย</option>
+            <option value="ธนาคารยูโอบี">ธนาคารยูโอบี</option>
+          </select>
+        </div>
+        <div class="field"><label>เลขที่บัญชี</label><input id="platformAccountNumber" placeholder="xxx-x-xxxxx-x"></div>
+        <div class="field"><label>ชื่อบัญชี</label><input id="platformAccountName" placeholder="ชื่อ-นามสกุล หรือ ชื่อบริษัท"></div>
+        <div class="field"><label>เบอร์พร้อมเพย์ (ไม่บังคับ)</label><input id="platformPromptpay" placeholder="เบอร์โทร 10 หลัก หรือเลขบัตร 13 หลัก"></div>
+      </div>
+      <button class="btn-mini btn-blue" style="margin-top:16px;padding:9px 18px;font-size:13px;" onclick="saveBankAccount()">บันทึกบัญชีรับเงิน</button>
+    </div>
+
+    <div class="panel-placeholder">
+      <strong>สิทธิ์การเข้าถึงระบบแบบละเอียด (Role & Permissions)</strong>
+      ตอนนี้ระบบรองรับบัญชี Admin แบบสิทธิ์เดียว (เข้าถึงได้ทุกฟังก์ชัน) — ถ้าต้องการแบ่งหลายระดับ
+      (เช่น Super Admin / Moderator ที่จำกัดสิทธิ์ต่างกัน) แจ้งได้เลยครับ ต้องเพิ่มตาราง roles/permissions
+      ในฐานข้อมูลและระบบตรวจสอบสิทธิ์ก่อนใช้งานจริง
+    </div>
+  </main>
+
+<script src="admin-shell.js"></script>
+<script>
+  requireAdmin();
+  mountSidebar('settings');
+
+  const API_BASE = window.location.origin + '/api';
+
+  async function loadBankAccount() {
+    try {
+      const res = await fetch(`${API_BASE}/platform/bank-account`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        document.getElementById('platformBankName').value = data.data.bank_name || '';
+        document.getElementById('platformAccountNumber').value = data.data.bank_account_number || '';
+        document.getElementById('platformAccountName').value = data.data.bank_account_name || '';
+        document.getElementById('platformPromptpay').value = data.data.promptpay_id || '';
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function saveBankAccount() {
+    const bankName = document.getElementById('platformBankName').value.trim();
+    const bankAccountNumber = document.getElementById('platformAccountNumber').value.trim();
+    const bankAccountName = document.getElementById('platformAccountName').value.trim();
+    const promptpayId = document.getElementById('platformPromptpay').value.trim();
+
+    if (!bankName || !bankAccountNumber || !bankAccountName) {
+      toast('กรุณากรอกธนาคาร เลขที่บัญชี และชื่อบัญชีให้ครบ', false);
+      return;
+    }
+
+    const res = await fetch(`${API_BASE}/admin/platform/bank-account`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bankName, bankAccountNumber, bankAccountName, promptpayId: promptpayId || null }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+  }
+
+  loadBankAccount();
+</script>
+</body>
+</html>
