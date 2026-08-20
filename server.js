@@ -2204,7 +2204,7 @@ app.get('/api/admin/garages', (req, res) => {
      FROM garages g
      JOIN users u ON u.id = g.user_id
      LEFT JOIN reviews rv ON rv.garage_id = g.user_id
-     GROUP BY g.id
+     GROUP BY g.id, u.id
      ORDER BY avg_rating DESC, g.id DESC`,
     (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
