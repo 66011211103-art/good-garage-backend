@@ -140,10 +140,13 @@ function mountAppbar(mountId = 'appbarMount') {
       <button class="icon-btn" title="ค้นหา" onclick="alert('ค้นหา — ใช้ช่องค้นหาในแต่ละหน้าแทนได้เลยครับ')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
       </button>
-      <button class="icon-btn" title="การแจ้งเตือน">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-        <span class="dot"></span>
-      </button>
+      <div class="notif-wrap" style="position:relative;">
+        <button class="icon-btn" title="การแจ้งเตือน" onclick="toggleNotifPanel(event)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="dot"></span>
+        </button>
+        <div id="notifPanel" style="display:none;position:absolute;top:44px;right:0;width:300px;max-height:360px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 40px -12px rgba(0,0,0,0.3);z-index:50;"></div>
+      </div>
       <div class="avatar-chip">
         <div class="circle">${(admin && admin.email ? admin.email.charAt(0) : 'A').toUpperCase()}</div>
         <span class="name">${admin ? (admin.name || 'Admin') : ''}</span>
@@ -151,6 +154,45 @@ function mountAppbar(mountId = 'appbarMount') {
     </div>
   `;
 }
+
+// ✅ แจ้งเตือน — เดิมปุ่มนี้ไม่มี onclick เลย กดแล้วไม่มีอะไรเกิดขึ้น (ปุ่มตายจริงๆ)
+// ตอนนี้ดึงรายการล่าสุดจาก /api/admin/activity-feed (endpoint เดิมที่ใช้ในตารางกิจกรรมของ
+// หน้าแดชบอร์ดอยู่แล้ว) มาโชว์เป็น dropdown แทน — โหลดครั้งเดียวตอนเปิดแผงครั้งแรกแล้วแคชไว้
+let __notifLoaded = false;
+async function toggleNotifPanel(event) {
+  event.stopPropagation();
+  const panel = document.getElementById('notifPanel');
+  if (!panel) return;
+  const willShow = panel.style.display === 'none';
+  panel.style.display = willShow ? 'block' : 'none';
+  if (!willShow || __notifLoaded) return;
+
+  panel.innerHTML = '<div style="padding:16px;font-size:12.5px;color:var(--text-mute);text-align:center;">กำลังโหลด...</div>';
+  try {
+    const res = await fetch(window.location.origin + '/api/admin/activity-feed');
+    const data = await res.json();
+    const items = (data.success && data.data && data.data.activity) ? data.data.activity.slice(0, 8) : [];
+    panel.innerHTML = items.length
+      ? items.map(a => `
+          <div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:12.5px;">
+            <div style="color:var(--text-main);font-weight:600;">${escapeHtml(a.user_name || '-')}</div>
+            <div style="color:var(--text-mute);margin-top:2px;">${escapeHtml(a.action)}</div>
+            <div style="color:var(--text-faint);font-size:11px;margin-top:2px;">${formatDate(a.at)}</div>
+          </div>`).join('')
+      : '<div style="padding:16px;font-size:12.5px;color:var(--text-mute);text-align:center;">ยังไม่มีการแจ้งเตือน</div>';
+    __notifLoaded = true;
+  } catch (err) {
+    panel.innerHTML = '<div style="padding:16px;font-size:12.5px;color:var(--danger);text-align:center;">โหลดการแจ้งเตือนไม่สำเร็จ</div>';
+  }
+}
+
+// ปิดแผงแจ้งเตือนเมื่อคลิกข้างนอก — ผูกครั้งเดียวตอนโหลดสคริปต์นี้ (ไม่ใช่ทุกครั้งที่ mountAppbar)
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('notifPanel');
+  if (panel && panel.style.display === 'block' && !e.target.closest('.notif-wrap')) {
+    panel.style.display = 'none';
+  }
+});
 
 function logoutAdmin() {
   sessionStorage.removeItem('adminUser');

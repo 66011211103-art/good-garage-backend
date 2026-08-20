@@ -89,6 +89,9 @@
       } else {
         actionsHtml = `<button class="btn-mini btn-amber" onclick="setStatus(${g.id}, 'suspended')">ระงับ</button>`;
       }
+      // ✅ ปุ่ม "แก้ไข" — backend (PUT /api/admin/garages/:id/profile, ข้อ 1.3.4.6) มีอยู่แล้ว
+      // แต่หน้านี้ไม่เคยมีปุ่มเรียกใช้เลย เพิ่มให้ทุกแถวเรียกใช้งานได้จริง
+      actionsHtml += ` <button class="btn-mini btn-blue" onclick="openEditModal(${g.id})">แก้ไข</button>`;
 
       return `
         <tr>
@@ -124,6 +127,57 @@
     const data = await res.json();
     toast(data.message, data.success);
     if (data.success) loadGarages();
+  }
+
+  // ✅ Modal แก้ไขข้อมูลอู่ (ชื่ออู่/เจ้าของ/เบอร์โทร/ที่อยู่) — เรียก endpoint ที่มีอยู่แล้ว
+  // แต่ไม่เคยมี UI เรียกใช้ (PUT /api/admin/garages/:id/profile)
+  function openEditModal(id) {
+    const g = allGarages.find(x => x.id === id);
+    if (!g) return;
+    closeEditModal();
+    const overlay = document.createElement('div');
+    overlay.id = 'editGarageOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,15,25,0.45);display:flex;align-items:center;justify-content:center;z-index:80;';
+    overlay.innerHTML = `
+      <div style="background:var(--panel);border-radius:16px;padding:24px;width:380px;max-width:92vw;box-shadow:0 20px 50px -12px rgba(0,0,0,0.35);">
+        <h3 style="margin:0 0 4px;font-size:16px;color:var(--text-main);">แก้ไขข้อมูลอู่</h3>
+        <p style="margin:0 0 18px;font-size:12.5px;color:var(--text-mute);">${escapeHtml(g.shop_name || '')}</p>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div><label style="display:block;font-size:12px;color:var(--text-mute);margin-bottom:5px;">ชื่ออู่</label>
+            <input id="editShopName" value="${escapeHtml(g.shop_name || '')}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
+          <div><label style="display:block;font-size:12px;color:var(--text-mute);margin-bottom:5px;">ชื่อเจ้าของ</label>
+            <input id="editOwnerName" value="${escapeHtml(g.owner_name || '')}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
+          <div><label style="display:block;font-size:12px;color:var(--text-mute);margin-bottom:5px;">เบอร์โทร</label>
+            <input id="editPhone" value="${escapeHtml(g.phone || '')}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
+          <div><label style="display:block;font-size:12px;color:var(--text-mute);margin-bottom:5px;">ที่อยู่</label>
+            <input id="editAddress" value="${escapeHtml(g.address || '')}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
+          <button class="btn-mini" style="background:var(--panel-2);color:var(--text-mute);" onclick="closeEditModal()">ยกเลิก</button>
+          <button class="btn-mini btn-blue" onclick="saveGarageProfile(${id})">บันทึก</button>
+        </div>
+      </div>`;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeEditModal(); });
+    document.body.appendChild(overlay);
+  }
+
+  function closeEditModal() {
+    const el = document.getElementById('editGarageOverlay');
+    if (el) el.remove();
+  }
+
+  async function saveGarageProfile(id) {
+    const shopName = document.getElementById('editShopName').value.trim();
+    const ownerName = document.getElementById('editOwnerName').value.trim();
+    const phone = document.getElementById('editPhone').value.trim();
+    const address = document.getElementById('editAddress').value.trim();
+    const res = await fetch(`${API_BASE}/admin/garages/${id}/profile`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shopName, ownerName, phone, address }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) { closeEditModal(); loadGarages(); }
   }
 
   document.getElementById('searchInput').addEventListener('input', render);
