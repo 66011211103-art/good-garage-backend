@@ -23,7 +23,14 @@
 //      แก้ไว้ในทุกจุดของ server.js/wallet_routes.js ที่จำเป็นแล้ว)
 // ============================================================================
 
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// ✅ แก้บั๊กจากการย้าย MySQL -> Postgres: pg คืนค่า BIGINT/NUMERIC เป็น string โดย default
+// (เพื่อกันข้อมูลสูญเสียความแม่นยำ) แต่โค้ด Dart ฝั่ง Flutter คาดหวังเป็นตัวเลข (as num)
+// เหมือนตอนใช้ mysql2 เดิม จึงแปลงให้เป็น number ตั้งแต่ตอนอ่านออกจาก DB
+// (เช่น COUNT(*) คืนเป็น bigint -> "6" เป็น string ทำให้ Flutter เจอ TypeError ตอน cast)
+types.setTypeParser(20, (val) => (val === null ? null : parseInt(val, 10))); // int8 / bigint
+types.setTypeParser(1700, (val) => (val === null ? null : parseFloat(val))); // numeric / decimal
 
 if (!process.env.DATABASE_URL) {
   console.error('❌ ไม่พบ DATABASE_URL ใน .env — ต้องตั้งค่าเป็น connection string ของ Supabase ก่อนรัน server');
