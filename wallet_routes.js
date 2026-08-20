@@ -14,7 +14,7 @@ const express = require('express');
 // ✅ รับ uploadSlip (multer middleware ตัวเดียวกับที่ /api/payments ใช้อยู่แล้ว) และ
 // toImageUrl (helper แปลงชื่อไฟล์ -> URL เต็ม) เข้ามาจาก server.js แทนที่จะสร้าง
 // multer instance ใหม่แยกต่างหาก — กันไม่ให้ path เก็บไฟล์/รูปแบบชื่อไฟล์เพี้ยนไปจากไฟล์อื่นในระบบ
-module.exports = (pool, uploadSlip, toImageUrl) => {
+module.exports = (pool, uploadSlip, toImageUrl, uploadToSupabase) => {
   const router = express.Router();
 
   // ===== อู่ดูประวัติการชำระค่าคอมมิชชั่นของตัวเอง =====
@@ -119,7 +119,16 @@ module.exports = (pool, uploadSlip, toImageUrl) => {
       // ✅ เก็บแค่ "ชื่อไฟล์" ลง DB (ไม่เก็บ path เต็ม) ให้ตรงกับทุกตารางอื่นในระบบ
       // (photos, avatar, slip_photo ของ payments ฯลฯ) เพื่อให้ toImageUrl() แปลงกลับ
       // เป็น URL เต็มได้ถูกต้องเสมอ ต่อให้ IP/โดเมนเซิร์ฟเวอร์เปลี่ยนทีหลัง
-      const slipPhoto = req.file ? req.file.filename : null;
+      let slipPhoto = null;
+      if (req.file) {
+        try {
+          slipPhoto = await uploadToSupabase(req.file, 'slip'); // ✅ เก็บที่ Supabase Storage แทนดิสก์ของ Render
+        } catch (uploadFileErr) {
+          await conn.rollback();
+          conn.release();
+          return res.json({ success: false, message: 'อัปโหลดสลิปไม่สำเร็จ: ' + uploadFileErr.message });
+        }
+      }
       const [result] = await conn.query(
         "INSERT INTO wallet_topups (garage_id, amount, slip_photo, status) VALUES (?, ?, ?, 'pending_confirmation') RETURNING id",
         [garageId, amount, slipPhoto]

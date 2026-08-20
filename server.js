@@ -10,6 +10,7 @@ const fs = require('fs');
 const nodemailer = require('nodemailer');
 const http = require('http'); // ✅ ต้องใช้ http server ดิบ เพื่อแนบ Socket.IO เข้าไปด้วย
 const { Server } = require('socket.io'); // ✅ ใช้ Socket.IO แทน Firebase Cloud Messaging
+const { uploadToSupabase, publicUrlFor } = require('./supabase_storage'); // ✅ เก็บรูปที่ Supabase Storage แทนดิสก์ของ Render (ดิสก์เป็น ephemeral หายทุกครั้งที่ redeploy)
 
 const app = express();
 app.use(cors());
@@ -77,35 +78,25 @@ transporter.verify((err) => {
   }
 });
 
-// สร้างโฟลเดอร์ uploads
-if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
-
-// ตั้งค่า multer
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, './uploads/'),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `avatar_${Date.now()}${ext}`);
-  },
-});
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
+// ✅ ใช้ memoryStorage แทน diskStorage เดิม — ไฟล์จะอยู่ใน req.file.buffer ชั่วคราว
+// แล้วอัปโหลดต่อไปเก็บที่ Supabase Storage (uploadToSupabase) แทนการเขียนลงดิสก์ของ Render
+// เหตุผล: ดิสก์ของ Render แพ็กเกจฟรีเป็น ephemeral ไฟล์หายทุกครั้งที่ redeploy/restart
+const memStorage = multer.memoryStorage();
+const upload = multer({ storage: memStorage, limits: { fileSize: 5 * 1024 * 1024 } });
 const uploadRepairPhotos = multer({
-  storage,
+  storage: memStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
 }).array('photos', 5); // สูงสุด 5 รูปต่อคำขอ
 
 const uploadSlip = multer({
-  storage,
+  storage: memStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
 }).single('slip'); // สลิปโอนเงิน 1 รูปต่อการชำระเงิน
 
 const uploadChatImage = multer({
-  storage,
+  storage: memStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
 }).single('image'); // แนบรูปในแชทได้ 1 รูปต่อข้อความ
-
-// Serve รูปภาพ
-app.use('/uploads', express.static('uploads'));
 
 // ✅ ใช้ตัวแปรนี้แทนการฝัง 127.0.0.1 ตายตัวในทุก URL รูปภาพ
 // ตั้งค่าใน .env เป็น SERVER_HOST=<IP เครื่อง Mac> เวลาทดสอบผ่านมือถือจริง
@@ -117,12 +108,14 @@ const PORT = process.env.PORT || 3000; // ✅ Railway จะกำหนด PORT
 // ตอน deploy บน Railway ให้ตั้งค่า PUBLIC_URL เป็นโดเมนที่ Railway ให้มาแทน (ไม่มี port ต่อท้าย เพราะ Railway ใช้ HTTPS 443 อัตโนมัติ)
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://${SERVER_HOST}:${PORT}`;
 
-// ✅ แปลงค่าที่เก็บไว้ใน DB (ไม่ว่าจะเป็นแค่ชื่อไฟล์ หรือ URL เต็มแบบเก่า) ให้เป็น URL เต็มที่ใช้ IP ปัจจุบันเสมอ
-// จุดสำคัญ: ทำให้ต่อให้ IP เครื่องเปลี่ยนไปกี่รอบ รูปเก่าก็ยังขึ้นอัตโนมัติ ไม่ต้องรัน SQL แก้ทุกครั้ง
+// ✅ แปลงค่าที่เก็บไว้ใน DB (ชื่อไฟล์) ให้เป็น URL เต็มของ Supabase Storage เสมอ
+// (ย้ายจากการเก็บไฟล์บนดิสก์ของ Render มาเก็บที่ Supabase Storage แทน เพราะดิสก์ของ
+// Render แพ็กเกจฟรีเป็น ephemeral หายทุกครั้งที่ redeploy — ดู supabase_storage.js)
 function toImageUrl(value) {
   if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value; // ✅ เผื่อของเก่าที่เคยเก็บเป็น URL เต็มไว้ก่อนหน้านี้
   const filename = value.includes('/') ? value.split('/').pop() : value;
-  return `${PUBLIC_URL}/uploads/${filename}`;
+  return publicUrlFor(filename);
 }
 
 // ✅ แปลงคอลัมน์ photos (เก็บเป็น JSON string ของชื่อไฟล์ เช่น '["a.jpg","b.jpg"]') ให้เป็น array ของ URL เต็ม
@@ -157,7 +150,7 @@ db.connect((err) => {
 // (ตอน uploadSlip/toImageUrl เพิ่งถูกประกาศ) ทำให้เรียกใช้ dbPool ก่อนมันจะถูก
 // initialize จริง เกิด ReferenceError: Cannot access 'dbPool' before initialization
 // เพราะ const อยู่ใน temporal dead zone จนกว่าจะรันมาถึงบรรทัดประกาศจริง
-const walletRoutes = require('./wallet_routes')(dbPool, uploadSlip, toImageUrl);
+const walletRoutes = require('./wallet_routes')(dbPool, uploadSlip, toImageUrl, uploadToSupabase);
 app.use('/api', walletRoutes);
 
 // ✅ เก็บ OTP ชั่วคราวไว้ใน memory (email -> { otp, expiresAt })
@@ -569,30 +562,34 @@ app.get('/api/garages', (req, res) => {
 });
 
 // ===== UPLOAD AVATAR ===== ✅ เพิ่มใหม่
-app.post('/api/user/avatar', upload.single('avatar'), (req, res) => {
+app.post('/api/user/avatar', upload.single('avatar'), async (req, res) => {
   console.log('📸 Upload avatar called');
   console.log('Body:', req.body);
-  console.log('File:', req.file);
 
   if (!req.file) return res.json({ success: false, message: 'ไม่พบไฟล์รูปภาพ' });
 
-  const { userId, userType } = req.body;
-  const filename = req.file.filename; // ✅ เก็บแค่ชื่อไฟล์ลง DB ไม่เก็บ IP ติดไปด้วย
-  const table = userType === 'customer' ? 'customers' : 'garages';
+  try {
+    const { userId, userType } = req.body;
+    const filename = await uploadToSupabase(req.file, 'avatar'); // ✅ เก็บที่ Supabase Storage แทนดิสก์ของ Render
+    const table = userType === 'customer' ? 'customers' : 'garages';
 
-  db.query(
-    `UPDATE ${table} SET avatar = ? WHERE user_id = ?`,
-    [filename, userId],
-    (err) => {
-      if (err) {
-        console.error('DB error:', err.message);
-        return res.json({ success: false, message: 'บันทึกรูปไม่สำเร็จ' });
+    db.query(
+      `UPDATE ${table} SET avatar = ? WHERE user_id = ?`,
+      [filename, userId],
+      (err) => {
+        if (err) {
+          console.error('DB error:', err.message);
+          return res.json({ success: false, message: 'บันทึกรูปไม่สำเร็จ' });
+        }
+        const avatarUrl = toImageUrl(filename);
+        console.log('✅ Avatar saved:', filename, '->', avatarUrl);
+        res.json({ success: true, message: 'อัปโหลดรูปสำเร็จ', data: { avatarUrl } });
       }
-      const avatarUrl = toImageUrl(filename);
-      console.log('✅ Avatar saved:', filename, '->', avatarUrl);
-      res.json({ success: true, message: 'อัปโหลดรูปสำเร็จ', data: { avatarUrl } });
-    }
-  );
+    );
+  } catch (uploadErr) {
+    console.error('❌ Supabase Storage upload error:', uploadErr.message);
+    res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadErr.message });
+  }
 });
 
 
@@ -739,7 +736,7 @@ app.delete('/api/cars/:id', (req, res) => {
 
 // ===== CREATE REPAIR REQUEST (ส่งคำขอซ่อมรถ) =====
 app.post('/api/repair-requests', (req, res) => {
-  uploadRepairPhotos(req, res, (err) => {
+  uploadRepairPhotos(req, res, async (err) => {
     if (err) return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + err.message });
 
     const { customerId, garageId, carId, vehicleType, problemCategory, description, address, latitude, longitude } = req.body;
@@ -753,7 +750,12 @@ app.post('/api/repair-requests', (req, res) => {
       return res.json({ success: false, message: 'กรุณาเลือกรถที่ต้องการซ่อม' });
     }
 
-    const photoFilenames = (req.files || []).map((f) => f.filename); // ✅ เก็บแค่ชื่อไฟล์ ไม่เก็บ IP
+    let photoFilenames = [];
+    try {
+      photoFilenames = await Promise.all((req.files || []).map((f) => uploadToSupabase(f, 'photo'))); // ✅ เก็บที่ Supabase Storage แทนดิสก์ของ Render
+    } catch (uploadErr) {
+      return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadErr.message });
+    }
 
     // ✅ ฟังก์ชันบันทึกจริง แยกออกมาเพราะถ้ามี carId ต้องไปดึง car_type ของรถคันนั้นมา
     // ก่อน (เก็บ vehicle_type ไว้เหมือนเดิมเพื่อ backward-compat กับส่วนอื่นที่ยังอ้างอิงคอลัมน์นี้)
@@ -1187,7 +1189,7 @@ app.put('/api/repair-requests/:id/technician-status', (req, res) => {
 
 // ===== ช่างบันทึกความคืบหน้างานซ่อม (โน้ต + อะไหล่ที่ใช้ + รูป) =====
 app.post('/api/repair-logs', (req, res) => {
-  uploadRepairPhotos(req, res, (err) => {
+  uploadRepairPhotos(req, res, async (err) => {
     if (err) return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + err.message });
 
     const { repairRequestId, technicianId, note, partsUsed } = req.body;
@@ -1195,7 +1197,12 @@ app.post('/api/repair-logs', (req, res) => {
       return res.json({ success: false, message: 'ข้อมูลไม่ครบ' });
     }
 
-    const photoFilenames = (req.files || []).map((f) => f.filename);
+    let photoFilenames = [];
+    try {
+      photoFilenames = await Promise.all((req.files || []).map((f) => uploadToSupabase(f, 'photo')));
+    } catch (uploadErr) {
+      return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadErr.message });
+    }
 
     db.query(
       `INSERT INTO repair_logs (repair_request_id, technician_id, note, parts_used, photos)
@@ -1240,7 +1247,7 @@ app.get('/api/repair-logs', (req, res) => {
 // ===== ลูกค้าให้คะแนน/รีวิวอู่ซ่อม (ทำได้เมื่องานนั้นสถานะ "completed" แล้วเท่านั้น) =====
 // ✅ multipart เพราะรองรับแนบรูปภาพประกอบรีวิวได้ (เหมือน repair-logs)
 app.post('/api/reviews', (req, res) => {
-  uploadRepairPhotos(req, res, (uploadErr) => {
+  uploadRepairPhotos(req, res, async (uploadErr) => {
     if (uploadErr) return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadErr.message });
 
     const { repairRequestId, customerId, rating, qualityRating, priceRating, serviceRating, comment } = req.body;
@@ -1262,7 +1269,12 @@ app.post('/api/reviews', (req, res) => {
     const qualityNum = parseSubRating(qualityRating);
     const priceNum = parseSubRating(priceRating);
     const serviceNum = parseSubRating(serviceRating);
-    const photoFilenames = (req.files || []).map((f) => f.filename);
+    let photoFilenames = [];
+    try {
+      photoFilenames = await Promise.all((req.files || []).map((f) => uploadToSupabase(f, 'photo')));
+    } catch (uploadFileErr) {
+      return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadFileErr.message });
+    }
 
     // ✅ ตรวจว่าคำขอซ่อมนี้เป็นของลูกค้าคนนี้จริง และซ่อมเสร็จแล้วเท่านั้นถึงจะรีวิวได้
     db.query(
@@ -1424,7 +1436,7 @@ app.put('/api/reviews/:id/reply', (req, res) => {
 
 // ✅ ลูกค้าแจ้งชำระเงิน (แนบสลิป) — ถ้าเคยถูกปฏิเสธมาก่อน จะอัปเดตแถวเดิมแทนการสร้างใหม่
 app.post('/api/payments', (req, res) => {
-  uploadSlip(req, res, (uploadErr) => {
+  uploadSlip(req, res, async (uploadErr) => {
     if (uploadErr) return res.json({ success: false, message: 'อัปโหลดสลิปไม่สำเร็จ: ' + uploadErr.message });
 
     const { repairRequestId, customerId, garageId, amount, method } = req.body;
@@ -1438,6 +1450,13 @@ app.post('/api/payments', (req, res) => {
     }
     if (!req.file) {
       return res.json({ success: false, message: 'กรุณาแนบสลิปการโอนเงิน' });
+    }
+
+    let slipFilename;
+    try {
+      slipFilename = await uploadToSupabase(req.file, 'slip'); // ✅ เก็บที่ Supabase Storage แทนดิสก์ของ Render
+    } catch (uploadFileErr) {
+      return res.json({ success: false, message: 'อัปโหลดสลิปไม่สำเร็จ: ' + uploadFileErr.message });
     }
 
     // ✅ ต้องเป็นคำขอซ่อมของลูกค้าคนนี้จริง และซ่อมเสร็จแล้วเท่านั้นถึงจะจ่ายได้
@@ -1476,7 +1495,7 @@ app.post('/api/payments', (req, res) => {
           db.query(
             `UPDATE payments SET amount = ?, method = ?, slip_photo = ?, status = 'pending_confirmation',
                rejection_reason = NULL, submitted_at = NOW(), confirmed_at = NULL WHERE id = ?`,
-            [amountNum, method, req.file.filename, existing[0].id],
+            [amountNum, method, slipFilename, existing[0].id],
             (err3) => {
               if (err3) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err3.message });
               finish();
@@ -1486,7 +1505,7 @@ app.post('/api/payments', (req, res) => {
           db.query(
             `INSERT INTO payments (repair_request_id, customer_id, garage_id, amount, method, slip_photo)
              VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-            [repairRequestId, customerId, garageId, amountNum, method, req.file.filename],
+            [repairRequestId, customerId, garageId, amountNum, method, slipFilename],
             (err3) => {
               if (err3) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err3.message });
               finish();
@@ -2015,7 +2034,7 @@ function containsContactInfo(text) {
 }
 
 app.post('/api/messages', (req, res) => {
-  uploadChatImage(req, res, (uploadErr) => {
+  uploadChatImage(req, res, async (uploadErr) => {
     if (uploadErr) return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadErr.message });
 
     const { conversationId, senderId, senderType, message } = req.body;
@@ -2024,6 +2043,15 @@ app.post('/api/messages', (req, res) => {
     }
     if ((!message || !message.toString().trim()) && !req.file) {
       return res.json({ success: false, message: 'กรุณาพิมพ์ข้อความหรือแนบรูป' });
+    }
+
+    let chatImageFilename = null;
+    if (req.file) {
+      try {
+        chatImageFilename = await uploadToSupabase(req.file, 'chat'); // ✅ เก็บที่ Supabase Storage แทนดิสก์ของ Render
+      } catch (uploadFileErr) {
+        return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadFileErr.message });
+      }
     }
 
     // ✅ บล็อกเฉพาะตอนงานยังไม่ปิด (repair_requests.status ยังไม่ completed) — พองาน
@@ -2053,7 +2081,7 @@ app.post('/api/messages', (req, res) => {
 
     function proceedSendMessage() {
 
-    const imageFilename = req.file ? req.file.filename : null;
+    const imageFilename = chatImageFilename;
 
     db.query(
       'INSERT INTO messages (conversation_id, sender_id, sender_type, message, image) VALUES (?, ?, ?, ?, ?) RETURNING id',
