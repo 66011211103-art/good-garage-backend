@@ -287,7 +287,46 @@ tbody td { padding: 12px 14px; vertical-align: middle; }
 }
 .panel-placeholder strong { display: block; color: var(--text-mute); font-size: 14px; margin-bottom: 6px; }
 
+/* ---------- ✅ เมนูมือถือ (hamburger) — ปุ่มขีด 3 ขีดใน appbar เปิด/ปิด sidebar ----------
+   เดิมจอเล็กกว่า 860px sidebar จะ display:none หายไปเลย ไม่มีทางกดเข้าเมนูอื่นได้อีก
+   ตอนนี้เปลี่ยนเป็น sidebar เลื่อนออกมาจากซ้าย (off-canvas) แทน มีฉากหลังคลิกเพื่อปิดด้วย */
+.menu-toggle-btn { display: none; }
+.sidebar-backdrop {
+  display: none;
+  position: fixed; inset: 0; background: rgba(15,15,25,0.5);
+  z-index: 90; opacity: 0; transition: opacity .18s ease;
+}
+.sidebar-backdrop.show { display: block; opacity: 1; }
+
 @media (max-width: 860px) {
-  .sidebar { display: none; }
-  .main { padding: 20px; }
+  .menu-toggle-btn { display: flex; }
+
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; height: 100vh; width: 248px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  .main { padding: 16px; }
+
+  /* ---------- appbar — เดิม title ยาวเกินจนตัวหนังสือตกบรรทัดซ้อนไอคอนพัง ---------- */
+  .appbar { padding: 0 12px; height: 56px; gap: 8px; }
+  .appbar .title {
+    font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0; flex: 1;
+  }
+  .appbar .actions { gap: 6px; }
+  .appbar .icon-btn { width: 32px; height: 32px; }
+  .appbar .avatar-chip .name { display: none; } /* จอแคบ เหลือแค่วงกลม ประหยัดที่ */
+  #notifPanel { width: calc(100vw - 24px); max-width: 320px; right: -8px !important; }
+
+  /* ---------- เนื้อหาทั่วไป — ย่อ padding/ระยะห่างให้พอดีจอแคบ ---------- */
+  .topbar { gap: 10px; margin-bottom: 16px; }
+  .topbar h1 { font-size: 17px; }
+  .search-input { min-width: 0; width: 100%; }
+  .stat-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .stat-card { padding: 14px 14px; }
 }

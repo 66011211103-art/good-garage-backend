@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="admin-shell.css">
 <style>
   .grid-2col { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; margin-bottom: 20px; }
+  @media (max-width: 860px) { .grid-2col { grid-template-columns: 1fr; } }
   .stack { display: flex; flex-direction: column; gap: 18px; }
   .satisfaction-score { font-size: 32px; font-weight: 800; color: var(--text-main); }
   .satisfaction-stars { color: var(--warning); font-size: 18px; letter-spacing: 2px; margin-top: 4px; }

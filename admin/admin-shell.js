@@ -134,7 +134,12 @@ function mountAppbar(mountId = 'appbarMount') {
   if (!mount) return;
 
   mount.innerHTML = `
-    <div class="title">Admin Management System</div>
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+      <button class="icon-btn menu-toggle-btn" title="เมนู" onclick="toggleMobileSidebar()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div class="title">Admin Management System</div>
+    </div>
     <div class="actions">
       ${themeToggleButtonHtml('appbar')}
       <button class="icon-btn" title="ค้นหา" onclick="alert('ค้นหา — ใช้ช่องค้นหาในแต่ละหน้าแทนได้เลยครับ')">
@@ -193,6 +198,27 @@ document.addEventListener('click', (e) => {
     panel.style.display = 'none';
   }
 });
+
+// ✅ เมนูมือถือ — เดิม sidebar แค่ display:none ไปเลยตอนจอเล็กกว่า 860px กดเข้าเมนูอื่น
+// ไม่ได้อีกเลย ตอนนี้เปลี่ยนเป็นเลื่อนออกมาจากซ้าย (off-canvas) กดปุ่มขีดสามขีดที่ appbar
+// เพื่อเปิด/ปิด มีฉากหลังคลิกเพื่อปิดด้วย (สร้างฉากหลังแบบ lazy ตอนเปิดครั้งแรกเท่านั้น)
+function toggleMobileSidebar(forceClose) {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+
+  let backdrop = document.getElementById('sidebarBackdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'sidebarBackdrop';
+    backdrop.className = 'sidebar-backdrop';
+    backdrop.onclick = () => toggleMobileSidebar(true);
+    document.body.appendChild(backdrop);
+  }
+
+  const shouldOpen = forceClose === true ? false : !sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', shouldOpen);
+  backdrop.classList.toggle('show', shouldOpen);
+}
 
 function logoutAdmin() {
   sessionStorage.removeItem('adminUser');

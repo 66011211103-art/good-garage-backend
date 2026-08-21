@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="admin-shell.css">
 <style>
   .charts-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+  @media (max-width: 860px) { .charts-row-3 { grid-template-columns: 1fr; } }
   .export-btn {
     display: inline-flex; align-items: center; gap: 6px; border: none; padding: 9px 16px;
     border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
