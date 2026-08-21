@@ -2201,7 +2201,13 @@ app.post('/api/messages', (req, res) => {
 
 // ===== ADMIN PANEL (หน้า HTML แยกจากแอป Flutter — เรียกใช้ API ชุดเดียวกัน) =====
 // เปิดที่ http://<ip>:3000/admin/login.html
-app.use('/admin', express.static('admin'));
+// ✅ ปิด browser cache สำหรับไฟล์ static ของ admin panel (JS/CSS/HTML) — เดิม browser
+// จะแคชไฟล์พวกนี้ไว้เอง พอแก้โค้ด admin แล้ว push/deploy ใหม่ ผู้ใช้จะยังเห็นเวอร์ชันเก่าอยู่
+// จนกว่าจะกด hard refresh เอง (สร้างความสับสนว่า deploy ไม่ขึ้นทั้งที่จริงๆ ขึ้นแล้ว)
+// no-cache (ไม่ใช่ no-store) ยังให้แคชได้แต่บังคับเช็กกับเซิร์ฟเวอร์ก่อนใช้ทุกครั้ง
+app.use('/admin', express.static('admin', {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 // ============================================================
 // ===== ADMIN: จัดการบัญชีผู้ใช้งาน (1.3.4.2) =====
