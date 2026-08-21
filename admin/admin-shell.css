@@ -287,10 +287,12 @@ tbody td { padding: 12px 14px; vertical-align: middle; }
 }
 .panel-placeholder strong { display: block; color: var(--text-mute); font-size: 14px; margin-bottom: 6px; }
 
-/* ---------- ✅ เมนูมือถือ (hamburger) — ปุ่มขีด 3 ขีดใน appbar เปิด/ปิด sidebar ----------
-   เดิมจอเล็กกว่า 860px sidebar จะ display:none หายไปเลย ไม่มีทางกดเข้าเมนูอื่นได้อีก
-   ตอนนี้เปลี่ยนเป็น sidebar เลื่อนออกมาจากซ้าย (off-canvas) แทน มีฉากหลังคลิกเพื่อปิดด้วย */
-.menu-toggle-btn { display: none; }
+/* ---------- ✅ ปุ่มขีด 3 ขีด (hamburger) ใน appbar — พับ/กาง sidebar ----------
+   ใช้ได้ทั้งจอเว็บ/เดสก์ท็อป (พับ/กางเมนูข้างแบบปกติ ผ่าน .sidebar.collapsed) และจอมือถือ
+   (เลื่อนเมนูออกมาทับหน้าจอแบบ off-canvas ผ่าน .sidebar.open — ดูเงื่อนไขจอมือถือด้านล่าง)
+   แสดงปุ่มนี้เสมอทุกขนาดจอ ไม่ผูกกับ media query เพราะใช้ได้ทั้งสองโหมด */
+.menu-toggle-btn { display: flex; }
+.sidebar.collapsed { display: none; }
 .sidebar-backdrop {
   display: none;
   position: fixed; inset: 0; background: rgba(15,15,25,0.5);
@@ -299,8 +301,6 @@ tbody td { padding: 12px 14px; vertical-align: middle; }
 .sidebar-backdrop.show { display: block; opacity: 1; }
 
 @media (max-width: 860px) {
-  .menu-toggle-btn { display: flex; }
-
   .sidebar {
     position: fixed;
     top: 0; left: 0; height: 100vh; width: 248px;

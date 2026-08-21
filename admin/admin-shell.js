@@ -124,6 +124,14 @@ function mountSidebar(activeKey) {
       ${themeToggleButtonHtml('sidebar')}
     </div>
   `;
+
+  // ✅ จอเว็บ/เดสก์ท็อป — จำสถานะพับ/กางเมนูไว้ (localStorage) เหมือนโหมดมืด กันเห็นเมนู
+  // กางออกมาวาบก่อนแล้วค่อยพับทีหลังตอนเปลี่ยนหน้า ถ้าผู้ใช้เคยกดพับไว้ก่อนหน้านี้
+  // (เช็กความกว้างจอด้วย — ถ้าเป็นจอมือถืออยู่ไม่เอาค่าพับจากจอเว็บมาใช้ กัน sidebar ค้าง
+  // display:none ทับ off-canvas ของมือถือจนกดปุ่มขีดสามขีดแล้วเมนูไม่ยอมโผล่ขึ้นมา)
+  if (window.innerWidth > MOBILE_MENU_BREAKPOINT && localStorage.getItem('adminSidebarCollapsed') === '1') {
+    mount.classList.add('collapsed');
+  }
 }
 
 // ✅ แถบบนสุด (Admin Management System + ค้นหา/แจ้งเตือน/avatar) ตรงกับต้นแบบ Figma
@@ -199,25 +207,38 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// ✅ เมนูมือถือ — เดิม sidebar แค่ display:none ไปเลยตอนจอเล็กกว่า 860px กดเข้าเมนูอื่น
-// ไม่ได้อีกเลย ตอนนี้เปลี่ยนเป็นเลื่อนออกมาจากซ้าย (off-canvas) กดปุ่มขีดสามขีดที่ appbar
-// เพื่อเปิด/ปิด มีฉากหลังคลิกเพื่อปิดด้วย (สร้างฉากหลังแบบ lazy ตอนเปิดครั้งแรกเท่านั้น)
+// ✅ ปุ่มขีดสามขีด — ใช้ได้ทั้งจอมือถือและจอเว็บ/เดสก์ท็อป แยกพฤติกรรมตามความกว้างจอ:
+//   - จอมือถือ (<=860px): เดิม sidebar แค่ display:none ไปเลย กดเข้าเมนูอื่นไม่ได้อีกเลย
+//     ตอนนี้เปลี่ยนเป็นเลื่อนออกมาจากซ้ายทับหน้าจอ (off-canvas) มีฉากหลังคลิกเพื่อปิดด้วย
+//   - จอเว็บ/เดสก์ท็อป (>860px): พับ/กางเมนูข้างแบบปกติ (ไม่มี overlay/ฉากหลัง) เนื้อหา
+//     ขยายเต็มพื้นที่แทนเมื่อพับ — จำสถานะไว้ใน localStorage เหมือนโหมดมืด
+const MOBILE_MENU_BREAKPOINT = 860;
+
 function toggleMobileSidebar(forceClose) {
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
+  const isMobile = window.innerWidth <= MOBILE_MENU_BREAKPOINT;
 
-  let backdrop = document.getElementById('sidebarBackdrop');
-  if (!backdrop) {
-    backdrop = document.createElement('div');
-    backdrop.id = 'sidebarBackdrop';
-    backdrop.className = 'sidebar-backdrop';
-    backdrop.onclick = () => toggleMobileSidebar(true);
-    document.body.appendChild(backdrop);
+  if (isMobile) {
+    let backdrop = document.getElementById('sidebarBackdrop');
+    if (!backdrop) {
+      backdrop = document.createElement('div');
+      backdrop.id = 'sidebarBackdrop';
+      backdrop.className = 'sidebar-backdrop';
+      backdrop.onclick = () => toggleMobileSidebar(true);
+      document.body.appendChild(backdrop);
+    }
+    const shouldOpen = forceClose === true ? false : !sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', shouldOpen);
+    backdrop.classList.toggle('show', shouldOpen);
+  } else {
+    // ✅ จอเว็บ — ไม่มีแนวคิด "ปิดค้าง" แบบมือถือ forceClose (จาก pageshow กันเมนูค้างตอน
+    // กดย้อนกลับ) จึงไม่ใช้กับโหมดนี้ ปล่อยให้พับ/กางตามที่จำไว้ใน localStorage ต่อไปตามปกติ
+    if (forceClose === true) return;
+    const shouldCollapse = !sidebar.classList.contains('collapsed');
+    sidebar.classList.toggle('collapsed', shouldCollapse);
+    localStorage.setItem('adminSidebarCollapsed', shouldCollapse ? '1' : '0');
   }
-
-  const shouldOpen = forceClose === true ? false : !sidebar.classList.contains('open');
-  sidebar.classList.toggle('open', shouldOpen);
-  backdrop.classList.toggle('show', shouldOpen);
 }
 
 // ✅ กันเมนูมือถือค้างเปิดอยู่ตอนกดปุ่ม "ย้อนกลับ" ของเบราว์เซอร์/มือถือ — บางเบราว์เซอร์
