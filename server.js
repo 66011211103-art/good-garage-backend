@@ -1341,6 +1341,72 @@ app.post('/api/reviews', (req, res) => {
   });
 });
 
+// ===== ✅ ใหม่ — แก้ไขรีวิวที่ส่งไปแล้ว (เฉพาะเจ้าของรีวิวเท่านั้นที่แก้ไขได้ ยืนยันสิทธิ์ด้วย customerId) =====
+// เดิมส่งรีวิวแล้วแก้ไขไม่ได้เลย ลูกค้าขอให้แก้ไขได้ — รองรับแก้คะแนน/ความเห็น/รูปภาพ
+// รูปเดิมที่อยากเก็บไว้ส่งมาทาง keepPhotos (JSON array ของ URL เต็มหรือชื่อไฟล์ก็ได้ ตัดเอาแค่ชื่อไฟล์)
+// รูปใหม่แนบมาทาง multipart field "photos" ตามปกติ รวมกับรูปเดิมที่เก็บไว้แล้วตัดไม่เกิน 5 รูป
+app.put('/api/reviews/:id', (req, res) => {
+  uploadRepairPhotos(req, res, async (uploadErr) => {
+    if (uploadErr) return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadErr.message });
+
+    const { id } = req.params;
+    const { customerId, rating, qualityRating, priceRating, serviceRating, comment, keepPhotos } = req.body;
+    const ratingNum = Number(rating);
+
+    if (!customerId) return res.json({ success: false, message: 'ข้อมูลไม่ครบถ้วน' });
+    if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+      return res.json({ success: false, message: 'กรุณาให้คะแนน 1-5 ดาว' });
+    }
+
+    const parseSubRating = (value) => {
+      const n = Number(value);
+      return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
+    };
+    const qualityNum = parseSubRating(qualityRating);
+    const priceNum = parseSubRating(priceRating);
+    const serviceNum = parseSubRating(serviceRating);
+
+    let newPhotoFilenames = [];
+    try {
+      newPhotoFilenames = await Promise.all((req.files || []).map((f) => uploadToSupabase(f, 'photo')));
+    } catch (uploadFileErr) {
+      return res.json({ success: false, message: 'อัปโหลดรูปไม่สำเร็จ: ' + uploadFileErr.message });
+    }
+
+    // ✅ ตรวจสิทธิ์ก่อน — ต้องเป็นรีวิวของ customerId คนนี้เท่านั้นถึงจะแก้ไขได้
+    db.query('SELECT customer_id FROM reviews WHERE id = ?', [id], (err, rows) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+      if (rows.length === 0) return res.json({ success: false, message: 'ไม่พบรีวิวนี้' });
+      if (String(rows[0].customer_id) !== String(customerId)) {
+        return res.json({ success: false, message: 'ไม่มีสิทธิ์แก้ไขรีวิวนี้' });
+      }
+
+      // ✅ รูปเดิมที่ลูกค้าเลือกเก็บไว้ (ส่งมาเป็น URL เต็มหรือชื่อไฟล์ก็ได้ ตัดเอาแค่ชื่อไฟล์ท้ายสุด)
+      let keepList = [];
+      try {
+        keepList = keepPhotos ? JSON.parse(keepPhotos) : [];
+      } catch (e) {
+        keepList = [];
+      }
+      const keepFilenames = keepList
+        .map((v) => (typeof v === 'string' && v.includes('/') ? v.split('/').pop() : v))
+        .filter(Boolean);
+      const finalPhotos = [...keepFilenames, ...newPhotoFilenames].slice(0, 5);
+
+      db.query(
+        `UPDATE reviews
+         SET rating = ?, quality_rating = ?, price_rating = ?, service_rating = ?, comment = ?, photos = ?
+         WHERE id = ?`,
+        [ratingNum, qualityNum, priceNum, serviceNum, comment || null, JSON.stringify(finalPhotos), id],
+        (err2) => {
+          if (err2) return res.json({ success: false, message: 'แก้ไขรีวิวไม่สำเร็จ: ' + err2.message });
+          res.json({ success: true, message: 'แก้ไขรีวิวเรียบร้อยแล้ว' });
+        }
+      );
+    });
+  });
+});
+
 // ===== ดูรีวิว — ระบุ garageId (ดูรีวิวทั้งหมดของอู่ + คะแนนเฉลี่ย) หรือ repairRequestId (เช็กว่างานนี้รีวิวหรือยัง) =====
 app.get('/api/reviews', (req, res) => {
   const { garageId, repairRequestId } = req.query;
