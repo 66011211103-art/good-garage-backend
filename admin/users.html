@@ -11,7 +11,10 @@
 <body>
   <aside class="sidebar" id="sidebarMount"></aside>
 
-  <main class="main">
+  <div class="main-wrap">
+    <div class="appbar" id="appbarMount"></div>
+
+    <main class="main">
     <div class="topbar">
       <div>
         <h1>บัญชีผู้ใช้งาน</h1>
@@ -40,11 +43,13 @@
       </table>
     </div>
   </main>
+  </div>
 
 <script src="admin-shell.js"></script>
 <script>
   requireAdmin();
   mountSidebar('users');
+  mountAppbar();
 
   const API_BASE = window.location.origin + '/api';
   let allUsers = [];

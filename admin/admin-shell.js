@@ -220,6 +220,12 @@ function toggleMobileSidebar(forceClose) {
   backdrop.classList.toggle('show', shouldOpen);
 }
 
+// ✅ กันเมนูมือถือค้างเปิดอยู่ตอนกดปุ่ม "ย้อนกลับ" ของเบราว์เซอร์/มือถือ — บางเบราว์เซอร์
+// (โดยเฉพาะ Chrome บน Android) จะ restore หน้าเดิมจาก cache (bfcache) แบบไม่รันสคริปต์ใหม่
+// เลย ทำให้ถ้าตอนกดออกจากหน้าเมนูค้างเปิดอยู่ พอกดย้อนกลับมาจะเห็นเมนู/ฉากหลังค้างอยู่ทับ
+// หน้าจอเหมือนบัค เลยบังคับปิดเมนูทุกครั้งที่หน้าแสดงผล (รวมถึงตอน restore จาก bfcache ด้วย)
+window.addEventListener('pageshow', () => toggleMobileSidebar(true));
+
 function logoutAdmin() {
   sessionStorage.removeItem('adminUser');
   window.location.href = 'login.html';

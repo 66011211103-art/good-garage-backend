@@ -24,7 +24,10 @@
 <body>
   <aside class="sidebar" id="sidebarMount"></aside>
 
-  <main class="main">
+  <div class="main-wrap">
+    <div class="appbar" id="appbarMount"></div>
+
+    <main class="main">
     <div class="topbar">
       <div>
         <h1>ตั้งค่าระบบ</h1>
@@ -79,11 +82,13 @@
       ในฐานข้อมูลและระบบตรวจสอบสิทธิ์ก่อนใช้งานจริง
     </div>
   </main>
+  </div>
 
 <script src="admin-shell.js"></script>
 <script>
   requireAdmin();
   mountSidebar('settings');
+  mountAppbar();
 
   const API_BASE = window.location.origin + '/api';
 
