@@ -1966,17 +1966,19 @@ app.get('/api/conversations', (req, res) => {
   const myType = customerId ? 'customer' : 'repair';
 
   db.query(
-    `SELECT c.id, c.customer_id, c.garage_id, c.created_at,
-            g.shop_name, g.avatar AS garage_avatar,
-            cu.first_name, cu.last_name, cu.avatar AS customer_avatar,
-            (SELECT message FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-            (SELECT image FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_image,
-            (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
-            (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type != ? AND m.is_read = 0) AS unread_count
-     FROM conversations c
-     JOIN garages g ON g.user_id = c.garage_id
-     JOIN customers cu ON cu.user_id = c.customer_id
-     WHERE ${whereCol} = ?
+    `SELECT * FROM (
+       SELECT c.id, c.customer_id, c.garage_id, c.created_at,
+              g.shop_name, g.avatar AS garage_avatar,
+              cu.first_name, cu.last_name, cu.avatar AS customer_avatar,
+              (SELECT message FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+              (SELECT image FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_image,
+              (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+              (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type != ? AND m.is_read = 0) AS unread_count
+        FROM conversations c
+        JOIN garages g ON g.user_id = c.garage_id
+        JOIN customers cu ON cu.user_id = c.customer_id
+        WHERE ${whereCol} = ?
+     ) sub
      ORDER BY last_message_at IS NULL, last_message_at DESC`,
     [myType, whereVal],
     (err, results) => {
