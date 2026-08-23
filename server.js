@@ -225,97 +225,74 @@ app.post('/api/auth/login', (req, res) => {
     return res.json({ success: false, message: 'กรุณากรอกอีเมลและรหัสผ่าน' });
   }
 
-  db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-    if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
-    if (results.length === 0) {
-      return res.json({ success: false, message: 'ไม่พบบัญชีนี้ในระบบ' });
-    }
+  // ✅ รวม query ผู้ใช้ + โปรไฟล์ลูกค้า/อู่ ให้เหลือ round-trip เดียว (LEFT JOIN ทั้งสองตาราง
+  // เพราะยังไม่รู้ user_type ก่อน query — ตารางที่ไม่ตรง user_type จะได้ค่า NULL ทั้งแถว)
+  db.query(
+    `SELECT u.*,
+            c.first_name AS cust_first_name, c.last_name AS cust_last_name, c.phone AS cust_phone,
+            c.address AS cust_address, c.car_model AS cust_car_model, c.car_plate AS cust_car_plate,
+            c.avatar AS cust_avatar, c.latitude AS cust_latitude, c.longitude AS cust_longitude,
+            g.shop_name AS garage_shop_name, g.owner_name AS garage_owner_name, g.phone AS garage_phone,
+            g.address AS garage_address, g.avatar AS garage_avatar, g.hours_weekday AS garage_hours_weekday,
+            g.hours_weekend AS garage_hours_weekend, g.services AS garage_services,
+            g.latitude AS garage_latitude, g.longitude AS garage_longitude
+     FROM users u
+     LEFT JOIN customers c ON c.user_id = u.id
+     LEFT JOIN garages g ON g.user_id = u.id
+     WHERE u.email = ?`,
+    [email],
+    async (err, results) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
+      if (results.length === 0) {
+        return res.json({ success: false, message: 'ไม่พบบัญชีนี้ในระบบ' });
+      }
 
-    const user = results[0];
-    const isMatch = await bcrypt.compare(password, user.password);
+      const user = results[0];
+      const isMatch = await bcrypt.compare(password, user.password);
 
-    if (!isMatch) {
-      return res.json({ success: false, message: 'รหัสผ่านไม่ถูกต้อง' });
-    }
+      if (!isMatch) {
+        return res.json({ success: false, message: 'รหัสผ่านไม่ถูกต้อง' });
+      }
 
-    // ✅ เพิ่ม branch ที่ 3 สำหรับช่าง (technician) นอกจาก customer/repair เดิม
-    if (user.user_type === 'technician') {
-      db.query(
-        `SELECT t.id AS technician_id, t.name, t.phone, t.avatar, t.garage_id, t.status,
-                g.shop_name
-         FROM technicians t
-         JOIN garages g ON g.user_id = t.garage_id
-         WHERE t.user_id = ?`,
-        [user.id],
-        (err, results) => {
-          if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
-          const profile = results[0] || {};
-          profile.avatar = toImageUrl(profile.avatar);
+      // ✅ ช่าง (technician) — ยังต้อง query แยกเพราะต้อง JOIN ตาราง garages ผ่าน garage_id ของช่างเอง
+      // (ไม่ใช่ garages ที่ user_id ตรงกับตัวช่าง) จึงรวมกับ query แรกไม่ได้
+      if (user.user_type === 'technician') {
+        db.query(
+          `SELECT t.id AS technician_id, t.name, t.phone, t.avatar, t.garage_id, t.status,
+                  g.shop_name
+           FROM technicians t
+           JOIN garages g ON g.user_id = t.garage_id
+           WHERE t.user_id = ?`,
+          [user.id],
+          (err2, techResults) => {
+            if (err2) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
+            const profile = techResults[0] || {};
+            profile.avatar = toImageUrl(profile.avatar);
 
-          if (profile.status === 'inactive') {
-            return res.json({ success: false, message: 'บัญชีนี้ถูกระงับการใช้งานแล้ว กรุณาติดต่ออู่' });
-          }
+            if (profile.status === 'inactive') {
+              return res.json({ success: false, message: 'บัญชีนี้ถูกระงับการใช้งานแล้ว กรุณาติดต่ออู่' });
+            }
 
-          res.json({
-            success: true,
-            message: 'เข้าสู่ระบบสำเร็จ',
-            data: {
-              user: {
-                id: user.id,
-                email: user.email,
-                userType: user.user_type,
-                ...profile,
+            res.json({
+              success: true,
+              message: 'เข้าสู่ระบบสำเร็จ',
+              data: {
+                user: {
+                  id: user.id,
+                  email: user.email,
+                  userType: user.user_type,
+                  ...profile,
+                },
               },
-            },
-          });
-        }
-      );
-      return;
-    }
-
-    // ✅ Admin — บัญชีผู้ดูแลระบบ ไม่มีตาราง profile แยก (ไม่มี shop/customer info ให้ผูก)
-    if (user.user_type === 'admin') {
-      return res.json({
-        success: true,
-        message: 'เข้าสู่ระบบสำเร็จ',
-        data: {
-          user: {
-            id: user.id,
-            email: user.email,
-            userType: user.user_type,
-            name: 'ผู้ดูแลระบบ',
-          },
-        },
-      });
-    }
-
-    const table = user.user_type === 'customer' ? 'customers' : 'garages';
-    // ✅ ดึงคอลัมน์ครบเหมือน /api/user/profile ไม่งั้นที่อยู่/พิกัดจะหายตอนล็อกอินใหม่
-    const nameCol = user.user_type === 'customer'
-      ? 'first_name, last_name, phone, address, car_model, car_plate, avatar, latitude, longitude'
-      : 'shop_name, owner_name, phone, address, avatar, hours_weekday, hours_weekend, services, latitude, longitude';
-
-    db.query(
-      `SELECT ${nameCol} FROM ${table} WHERE user_id = ?`,
-      [user.id],
-      (err, profileResults) => {
-        if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
-
-        const profile = profileResults[0] || {};
-
-        // services เก็บเป็น JSON string ใน DB -> แปลงกลับเป็น array ก่อนส่งให้ Flutter
-        if (user.user_type === 'repair' && profile.services) {
-          try {
-            profile.services = JSON.parse(profile.services);
-          } catch (e) {
-            profile.services = [];
+            });
           }
-        }
+        );
+        return;
+      }
 
-        // ✅ แปลงเป็น URL เต็มด้วย IP ปัจจุบันเสมอ (ใช้ได้ทั้งข้อมูลเก่า/ใหม่)
-        profile.avatar = toImageUrl(profile.avatar);
-
-        res.json({
+      // ✅ Admin — บัญชีผู้ดูแลระบบ ไม่มีตาราง profile แยก (ไม่มี shop/customer info ให้ผูก)
+      if (user.user_type === 'admin') {
+        return res.json({
           success: true,
           message: 'เข้าสู่ระบบสำเร็จ',
           data: {
@@ -323,13 +300,67 @@ app.post('/api/auth/login', (req, res) => {
               id: user.id,
               email: user.email,
               userType: user.user_type,
-              ...profile,
+              name: 'ผู้ดูแลระบบ',
             },
           },
         });
       }
-    );
-  });
+
+      // ✅ ลูกค้า/อู่ — โปรไฟล์มาจากการ JOIN ใน query แรกแล้ว ไม่ต้อง query ซ้ำอีกรอบ
+      let profile = {};
+      if (user.user_type === 'customer') {
+        profile = {
+          first_name: user.cust_first_name,
+          last_name: user.cust_last_name,
+          phone: user.cust_phone,
+          address: user.cust_address,
+          car_model: user.cust_car_model,
+          car_plate: user.cust_car_plate,
+          avatar: user.cust_avatar,
+          latitude: user.cust_latitude,
+          longitude: user.cust_longitude,
+        };
+      } else {
+        profile = {
+          shop_name: user.garage_shop_name,
+          owner_name: user.garage_owner_name,
+          phone: user.garage_phone,
+          address: user.garage_address,
+          avatar: user.garage_avatar,
+          hours_weekday: user.garage_hours_weekday,
+          hours_weekend: user.garage_hours_weekend,
+          services: user.garage_services,
+          latitude: user.garage_latitude,
+          longitude: user.garage_longitude,
+        };
+
+        // services เก็บเป็น JSON string ใน DB -> แปลงกลับเป็น array ก่อนส่งให้ Flutter
+        if (profile.services) {
+          try {
+            profile.services = JSON.parse(profile.services);
+          } catch (e) {
+            profile.services = [];
+          }
+        }
+      }
+
+      // ✅ แปลงเป็น URL เต็มด้วย IP ปัจจุบันเสมอ (ใช้ได้ทั้งข้อมูลเก่า/ใหม่)
+      profile.avatar = toImageUrl(profile.avatar);
+
+      res.json({
+        success: true,
+        message: 'เข้าสู่ระบบสำเร็จ',
+        data: {
+          user: {
+            id: user.id,
+            email: user.email,
+            userType: user.user_type,
+            ...profile,
+          },
+        },
+      });
+    }
+  );
 });
 
 // ===== UPDATE PROFILE =====
