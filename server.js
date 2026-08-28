@@ -59,14 +59,25 @@ function sendPushNotification(userId, userType, title, body, data = {}) {
 
 
 // ตั้งค่าตัวส่งอีเมลผ่าน SMTP (Gmail)
+// ✅ แก้บั๊ก: เดิม secure: false ตายตัว ถ้าใครเปลี่ยน SMTP_PORT เป็น 465 (SSL ตรงๆ)
+// จะต่อไม่ติดเพราะ secure ต้องเป็น true คู่กับพอร์ต 465 เท่านั้น เปลี่ยนให้คำนวณ
+// จากพอร์ตอัตโนมัติแทน — เผื่อพอร์ต 587 (STARTTLS) โดน Render บล็อก/ต่อไม่ติด
+// (เจอจริงจาก log "Connection timeout") จะได้แค่เปลี่ยนค่า SMTP_PORT เป็น 465
+// ใน Environment ของ Render แล้วลองใหม่ได้เลยโดยไม่ต้องแก้โค้ดเพิ่ม
+// เพิ่ม timeout สั้นๆ (10 วิ) กันค้างนานเป็นนาทีเหมือนที่เจอ ให้ fail เร็วและ
+// ตอบกลับแอปทันเวลาแทนที่แอปจะ timeout ตัวเองไปก่อนได้คำตอบจริงจากเซิร์ฟเวอร์
+const smtpPort = Number(process.env.SMTP_PORT) || 587;
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: false, // 587 ใช้ STARTTLS ไม่ใช่ SSL ตรงๆ
+  port: smtpPort,
+  secure: smtpPort === 465, // 465 = SSL ตรงๆ, 587 = STARTTLS
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
 });
 
 // เช็คตอน server เริ่มทำงานว่าตั้งค่า SMTP ถูกไหม (ช่วย debug)
@@ -76,6 +87,13 @@ transporter.verify((err) => {
   } else {
     console.log('✅ พร้อมส่งอีเมลผ่าน SMTP');
   }
+});
+
+// ✅ Health-check endpoint แบบเบาที่สุด — ไม่แตะฐานข้อมูลเลย ใช้ให้บริการ ping
+// ภายนอก (เช่น UptimeRobot / cron-job.org) เรียกเป็นระยะเพื่อกัน Render แพ็กเกจฟรี
+// "หลับ" หลังไม่มีคนใช้งานนาน 15 นาที ตอบกลับทันทีไม่ต้องรอ query DB
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, status: 'ok', time: new Date().toISOString() });
 });
 
 // ✅ ใช้ memoryStorage แทน diskStorage เดิม — ไฟล์จะอยู่ใน req.file.buffer ชั่วคราว
