@@ -66,6 +66,11 @@ function sendPushNotification(userId, userType, title, body, data = {}) {
 // ใน Environment ของ Render แล้วลองใหม่ได้เลยโดยไม่ต้องแก้โค้ดเพิ่ม
 // เพิ่ม timeout สั้นๆ (10 วิ) กันค้างนานเป็นนาทีเหมือนที่เจอ ให้ fail เร็วและ
 // ตอบกลับแอปทันเวลาแทนที่แอปจะ timeout ตัวเองไปก่อนได้คำตอบจริงจากเซิร์ฟเวอร์
+// ✅ แก้บั๊ก: เจอจริงจาก log "connect ENETUNREACH 2607:f8b0:...:587" — Render
+// พยายามต่อ Gmail SMTP ผ่าน IPv6 (DNS ของ smtp.gmail.com คืนทั้ง IPv4/IPv6 มา
+// Node เลือกลอง IPv6 ก่อน) แต่เครือข่ายขาออกของ Render ไม่รองรับ IPv6 เลยต่อไม่ติด
+// ทันที (Network unreachable) ทั้งที่ IPv4 ใช้งานได้ปกติ — ใส่ family: 4 บังคับให้
+// nodemailer ต่อผ่าน IPv4 เท่านั้น แก้ปัญหานี้ตรงจุด
 const smtpPort = Number(process.env.SMTP_PORT) || 587;
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -78,6 +83,7 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 10000,
+  family: 4, // บังคับใช้ IPv4 กัน ENETUNREACH จาก IPv6 ที่ Render ต่อไม่ติด
 });
 
 // เช็คตอน server เริ่มทำงานว่าตั้งค่า SMTP ถูกไหม (ช่วย debug)
