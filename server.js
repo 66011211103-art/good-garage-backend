@@ -145,6 +145,26 @@ db.connect((err) => {
   }
 });
 
+// ✅ เพิ่มใหม่: สร้างตาราง complaints อัตโนมัติถ้ายังไม่มี — endpoint ข้อร้องเรียนเตรียมไว้
+// รอฝั่งลูกค้ามานานแล้ว (ดูคอมเมนต์เดิมใกล้ POST /api/complaints ด้านล่าง) แต่ไม่เคยมีใคร
+// สร้างตารางจริงในฐานข้อมูลเลย ทำให้ก่อนหน้านี้ /api/admin/complaints คืนค่าว่างเปล่าตลอด
+// (ดักด้วย try/catch ไว้อยู่แล้ว) — ตอนนี้สร้างให้อัตโนมัติตอน server เริ่มทำงานทุกครั้ง
+// (IF NOT EXISTS จึงปลอดภัย รันซ้ำได้ไม่มีผลข้างเคียง)
+dbPool
+  .query(
+    `CREATE TABLE IF NOT EXISTS complaints (
+      id SERIAL PRIMARY KEY,
+      reporter_id INTEGER NOT NULL,
+      garage_id INTEGER,
+      subject TEXT NOT NULL,
+      detail TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )`
+  )
+  .then(() => console.log('✅ ตาราง complaints พร้อมใช้งาน'))
+  .catch((err) => console.error('❌ สร้างตาราง complaints ไม่สำเร็จ:', err.message));
+
 // ✅ ระบบ wallet + หักค่าคอมมิชชั่นแบบ Grab-style (แทนที่ระบบสมุดบัญชีเดิม)
 // ต้อง mount ตรงนี้ (หลัง dbPool ถูกประกาศแล้วเท่านั้น) — เดิมวางไว้ก่อนหน้านี้
 // (ตอน uploadSlip/toImageUrl เพิ่งถูกประกาศ) ทำให้เรียกใช้ dbPool ก่อนมันจะถูก
@@ -2437,16 +2457,41 @@ app.delete('/api/admin/reviews/:id', (req, res) => {
   });
 });
 
-// ⚠️ ข้อร้องเรียน (complaints) — ตอนนี้แอป Flutter ยังไม่มีฟีเจอร์ให้ลูกค้า "แจ้งข้อร้องเรียน"
-// เลย (ต่างจากรีวิวที่มีอยู่แล้ว) endpoint นี้เตรียมไว้รองรับล่วงหน้า แต่จะว่างเปล่าจนกว่า
-// จะมีฟีเจอร์แจ้งข้อร้องเรียนฝั่งลูกค้าเพิ่มเข้ามาจริง (ต้องคุยเพิ่มถ้าอยากทำ)
+// ✅ ลูกค้า/อู่/ช่าง แจ้งข้อร้องเรียน (แยกจากรีวิว) — เดิม endpoint ฝั่งแอดมินด้านล่างเตรียมไว้
+// รอมานานแล้วแต่ไม่เคยมีทางส่งเข้ามาเลย ตอนนี้เชื่อมแล้ว reporterId คือ users.id ของคนที่
+// ล็อกอินอยู่ (ส่งมาจาก client), garageId ใส่หรือไม่ใส่ก็ได้ (อู่ที่เกี่ยวข้องกับเรื่องที่ร้องเรียน)
+// แอดมินเห็นทันทีในหน้า "รีวิว & ข้อร้องเรียน" (ใช้ endpoint GET/resolve/delete ที่มีอยู่แล้วด้านล่าง)
+app.post('/api/complaints', (req, res) => {
+  const { reporterId, garageId, subject, detail } = req.body;
+  if (!reporterId || !subject || !subject.toString().trim()) {
+    return res.json({ success: false, message: 'กรุณากรอกหัวข้อข้อร้องเรียน' });
+  }
+  db.query(
+    'INSERT INTO complaints (reporter_id, garage_id, subject, detail, status) VALUES (?, ?, ?, ?, ?) RETURNING id',
+    [reporterId, garageId || null, subject, detail || null, 'pending'],
+    (err) => {
+      if (err) return res.json({ success: false, message: 'ส่งข้อร้องเรียนไม่สำเร็จ: ' + err.message });
+      res.json({ success: true, message: 'ส่งข้อร้องเรียนเรียบร้อยแล้ว ทีมงานจะดำเนินการโดยเร็วที่สุด' });
+    }
+  );
+});
+
 app.get('/api/admin/complaints', (req, res) => {
   db.query(
+    // ✅ แก้ไข: ผู้แจ้ง (reporter_id) อาจเป็นลูกค้า/เจ้าของอู่/ช่างก็ได้ (ดู POST /api/complaints
+    // ด้านบน — ทุก userType แจ้งได้) เดิม JOIN แค่ตาราง customers ทำให้ถ้าอู่หรือช่างเป็นคน
+    // แจ้งเอง ชื่อผู้แจ้งจะว่างเปล่าในหน้าแอดมิน — ใช้ COALESCE ไล่ดูทั้ง 3 ตารางแทน
     `SELECT cp.id, cp.subject, cp.detail, cp.status, cp.created_at,
-            TRIM(CONCAT(c.first_name, ' ', c.last_name)) AS reporter_name,
+            COALESCE(
+              NULLIF(TRIM(CONCAT(c.first_name, ' ', c.last_name)), ''),
+              rg.owner_name,
+              rt.name
+            ) AS reporter_name,
             g.shop_name AS garage_name
      FROM complaints cp
      LEFT JOIN customers c ON c.user_id = cp.reporter_id
+     LEFT JOIN garages rg ON rg.user_id = cp.reporter_id
+     LEFT JOIN technicians rt ON rt.user_id = cp.reporter_id
      LEFT JOIN garages g ON g.user_id = cp.garage_id
      ORDER BY cp.created_at DESC`,
     (err, results) => {
