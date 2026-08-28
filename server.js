@@ -12,6 +12,20 @@ const http = require('http'); // ✅ ต้องใช้ http server ดิบ
 const { Server } = require('socket.io'); // ✅ ใช้ Socket.IO แทน Firebase Cloud Messaging
 const { uploadToSupabase, publicUrlFor } = require('./supabase_storage'); // ✅ เก็บรูปที่ Supabase Storage แทนดิสก์ของ Render (ดิสก์เป็น ephemeral หายทุกครั้งที่ redeploy)
 
+// ✅ แก้บั๊กจริง (ต่อจาก family: 4 ที่ใส่ในตัว transporter ด้านล่างแล้วยังไม่ได้ผล):
+// เช็คซอร์สโค้ดของ nodemailer แล้วพบว่า option "family" ที่ส่งเข้า
+// createTransport() ไม่ได้ถูกส่งต่อไปให้ net.connect()/tls.connect() จริงๆ เลย
+// (nodemailer ไม่ได้อ่านค่านี้) ปัญหาจริงๆ คือ Node ตั้งแต่เวอร์ชัน 17+ ค่า default
+// จะ resolve DNS แบบคืนทั้ง IPv6 (AAAA) และ IPv4 (A) แล้วลองต่อ IPv6 ก่อนเสมอ
+// (Happy Eyeballs) พอเครือข่ายขาออกของ Render ต่อ IPv6 ไม่ได้จริง (ไม่มี route)
+// เลยพัง "connect ENETUNREACH" ทันทีตั้งแต่ก่อนจะได้ลอง IPv4 เลยด้วยซ้ำ — วิธีแก้ที่
+// ตรงจุดคือสั่งทั้งโปรเซสให้ resolve DNS แบบเอา IPv4 ขึ้นก่อนเสมอด้วย
+// dns.setDefaultResultOrder('ipv4first') ตรงนี้ ก่อนโค้ดส่วนอื่น (รวมถึง nodemailer,
+// Supabase, Postgres) จะได้ครอบคลุมทุกจุดที่ต่อเน็ตออกไปจากเซิร์ฟเวอร์ ไม่ใช่แค่
+// nodemailer ที่แก้ไปแล้วไม่ได้ผลจริง
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
