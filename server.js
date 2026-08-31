@@ -348,15 +348,19 @@ app.post('/api/auth/login', (req, res) => {
     [email],
     async (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
+      // ✅ แก้ตามคำขอ — เดิมบอกตรงๆ ว่า "ไม่พบบัญชีนี้ในระบบ" (เผยว่าอีเมลนี้ไม่มีในระบบ)
+      // แยกจาก "รหัสผ่านไม่ถูกต้อง" (เผยว่าอีเมลนี้มีอยู่จริง แค่รหัสผ่านผิด) — สองข้อความ
+      // นี้รวมกันทำให้คนนอกลองอีเมลสุ่มๆ แล้วดูข้อความตอบกลับเพื่อเดาว่าอีเมลไหน "มีอยู่จริง"
+      // ในระบบได้ (account enumeration) จึงรวมเป็นข้อความเดียวกันไม่ระบุว่าผิดจุดไหน
       if (results.length === 0) {
-        return res.json({ success: false, message: 'ไม่พบบัญชีนี้ในระบบ' });
+        return res.json({ success: false, message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
       }
 
       const user = results[0];
       const isMatch = await bcrypt.compare(password, user.password);
 
       if (!isMatch) {
-        return res.json({ success: false, message: 'รหัสผ่านไม่ถูกต้อง' });
+        return res.json({ success: false, message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
       }
 
       // ✅ ช่าง (technician) — ยังต้อง query แยกเพราะต้อง JOIN ตาราง garages ผ่าน garage_id ของช่างเอง
