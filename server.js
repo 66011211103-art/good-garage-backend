@@ -2115,11 +2115,16 @@ app.put('/api/quotations/:id/respond', (req, res) => {
     return res.json({ success: false, message: 'ไม่พบ customerId' });
   }
 
+  // ✅ แก้บั๊ก: เดิมเขียนเป็น syntax "UPDATE ... JOIN ... SET" แบบ MySQL ซึ่ง
+  // PostgreSQL (ที่ backend จริงต่ออยู่ ผ่าน db_pg.js) ไม่รองรับ ทำให้ทุกครั้งที่ลูกค้า
+  // กดยืนยัน/ปฏิเสธใบเสนอราคาจะพัง "syntax error at or near JOIN" ทันที — Postgres
+  // ต้องเขียนเป็น "UPDATE ... SET ... FROM ... WHERE" แทน (ค่า placeholder ?
+  // เรียงลำดับเดิมทุกอย่าง ไม่ต้องแก้ที่ฝั่ง params)
   db.query(
     `UPDATE quotations q
-     JOIN repair_requests rr ON rr.id = q.repair_request_id
-     SET q.status = ?, q.customer_rejection_reason = ?, q.responded_at = NOW()
-     WHERE q.id = ? AND rr.customer_id = ?`,
+     SET status = ?, customer_rejection_reason = ?, responded_at = NOW()
+     FROM repair_requests rr
+     WHERE rr.id = q.repair_request_id AND q.id = ? AND rr.customer_id = ?`,
     [status, status === 'rejected' ? (reason || null) : null, id, customerId],
     (err, result) => {
       if (err) return res.json({ success: false, message: 'อัปเดตไม่สำเร็จ: ' + err.message });
