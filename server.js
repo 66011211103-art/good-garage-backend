@@ -7,7 +7,6 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const nodemailer = require('nodemailer');
 const http = require('http'); // ✅ ต้องใช้ http server ดิบ เพื่อแนบ Socket.IO เข้าไปด้วย
 const { Server } = require('socket.io'); // ✅ ใช้ Socket.IO แทน Firebase Cloud Messaging
 const { uploadToSupabase, publicUrlFor } = require('./supabase_storage'); // ✅ เก็บรูปที่ Supabase Storage แทนดิสก์ของ Render (ดิสก์เป็น ephemeral หายทุกครั้งที่ redeploy)
@@ -72,42 +71,90 @@ function sendPushNotification(userId, userType, title, body, data = {}) {
 }
 
 
-// ตั้งค่าตัวส่งอีเมลผ่าน SMTP (Gmail)
-// ✅ แก้บั๊ก: เดิม secure: false ตายตัว ถ้าใครเปลี่ยน SMTP_PORT เป็น 465 (SSL ตรงๆ)
-// จะต่อไม่ติดเพราะ secure ต้องเป็น true คู่กับพอร์ต 465 เท่านั้น เปลี่ยนให้คำนวณ
-// จากพอร์ตอัตโนมัติแทน — เผื่อพอร์ต 587 (STARTTLS) โดน Render บล็อก/ต่อไม่ติด
-// (เจอจริงจาก log "Connection timeout") จะได้แค่เปลี่ยนค่า SMTP_PORT เป็น 465
-// ใน Environment ของ Render แล้วลองใหม่ได้เลยโดยไม่ต้องแก้โค้ดเพิ่ม
-// เพิ่ม timeout สั้นๆ (10 วิ) กันค้างนานเป็นนาทีเหมือนที่เจอ ให้ fail เร็วและ
-// ตอบกลับแอปทันเวลาแทนที่แอปจะ timeout ตัวเองไปก่อนได้คำตอบจริงจากเซิร์ฟเวอร์
-// ✅ แก้บั๊ก: เจอจริงจาก log "connect ENETUNREACH 2607:f8b0:...:587" — Render
-// พยายามต่อ Gmail SMTP ผ่าน IPv6 (DNS ของ smtp.gmail.com คืนทั้ง IPv4/IPv6 มา
-// Node เลือกลอง IPv6 ก่อน) แต่เครือข่ายขาออกของ Render ไม่รองรับ IPv6 เลยต่อไม่ติด
-// ทันที (Network unreachable) ทั้งที่ IPv4 ใช้งานได้ปกติ — ใส่ family: 4 บังคับให้
-// nodemailer ต่อผ่าน IPv4 เท่านั้น แก้ปัญหานี้ตรงจุด
-const smtpPort = Number(process.env.SMTP_PORT) || 587;
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: smtpPort,
-  secure: smtpPort === 465, // 465 = SSL ตรงๆ, 587 = STARTTLS
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000,
-  family: 4, // บังคับใช้ IPv4 กัน ENETUNREACH จาก IPv6 ที่ Render ต่อไม่ติด
-});
-
-// เช็คตอน server เริ่มทำงานว่าตั้งค่า SMTP ถูกไหม (ช่วย debug)
-transporter.verify((err) => {
-  if (err) {
-    console.error('❌ ตั้งค่า SMTP ไม่ถูกต้อง:', err.message);
-  } else {
-    console.log('✅ พร้อมส่งอีเมลผ่าน SMTP');
+// ✅ แก้บั๊กจริง (สาเหตุสุดท้ายที่เจอ): เปลี่ยนจากส่งอีเมลผ่าน Gmail SMTP ตรงๆ
+// (nodemailer) มาใช้ Brevo API แทนทั้งหมด — Render ประกาศตั้งแต่ 26 ก.ย. 2025 ว่า
+// บล็อกการเชื่อมต่อ SMTP ขาออก (พอร์ต 25/465/587) สำหรับ free tier ทุกกรณี ต่อให้
+// ตั้งค่าถูกแค่ไหน (secure, family: 4, dns ipv4first ที่แก้ไปก่อนหน้านี้) ก็ยังส่ง
+// ไม่ได้เพราะโดนบล็อกที่ระดับเครือข่าย ไม่ใช่ที่โค้ด — Brevo ส่งอีเมลผ่าน HTTPS API
+// (พอร์ต 443) ซึ่ง Render ไม่บล็อก เลยแก้ปัญหานี้ได้ตรงจุดจริงๆ
+// ต้องตั้งค่า BREVO_API_KEY และ BREVO_SENDER_EMAIL ใน Environment ของ Render
+// (BREVO_SENDER_EMAIL ต้องเป็นอีเมลที่ verify เป็น Sender ไว้ในบัญชี Brevo แล้ว)
+async function sendEmailViaBrevo({ to, subject, html }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || process.env.SMTP_FROM || process.env.SMTP_USER;
+  if (!apiKey || !senderEmail) {
+    throw new Error('ยังไม่ได้ตั้งค่า BREVO_API_KEY หรือ BREVO_SENDER_EMAIL ใน Environment ของ Render');
   }
-});
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      sender: { email: senderEmail, name: 'อู่ที่ไว้วางใจ' },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Brevo API error ${response.status}: ${errText}`);
+  }
+}
+
+// ✅ แปลงเบอร์โทรรูปแบบไทย (เช่น "0812345678" ที่ผู้ใช้กรอก/เก็บใน DB) ให้เป็นรูปแบบ
+// รหัสประเทศไม่มีเครื่องหมาย + ตามที่ Brevo SMS API ต้องการ (เช่น "66812345678")
+function normalizeThaiPhone(phone) {
+  const digits = String(phone).replace(/\D/g, '');
+  if (digits.startsWith('66')) return digits;
+  if (digits.startsWith('0')) return '66' + digits.slice(1);
+  return digits;
+}
+
+// ✅ ส่ง OTP ทาง SMS ผ่าน Brevo (บัญชีเดียวกับที่ใช้ส่งอีเมล) — ต้องตั้งค่า
+// BREVO_API_KEY ใน Environment (ตัวเดียวกับที่ใช้ส่งอีเมล) และตั้ง BREVO_SMS_SENDER
+// เป็นชื่อผู้ส่ง (ตัวอักษร/ตัวเลขไม่เกิน 11 ตัว) — หมายเหตุ: บางประเทศ (รวมถึงไทย)
+// ผู้ให้บริการเครือข่ายมือถืออาจต้องลงทะเบียน Sender ID ล่วงหน้าถึงจะการันตีว่าส่งถึง
+// ทุกครั้ง แนะนำให้ทดสอบส่งเข้าเบอร์ตัวเองก่อนใช้งานจริงเสมอ
+async function sendSmsViaBrevo({ to, content }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  const sender = process.env.BREVO_SMS_SENDER || 'GoodGarage';
+  if (!apiKey) {
+    throw new Error('ยังไม่ได้ตั้งค่า BREVO_API_KEY ใน Environment ของ Render');
+  }
+
+  const response = await fetch('https://api.brevo.com/v3/transactionalSMS/send', {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      sender,
+      recipient: normalizeThaiPhone(to),
+      content,
+      type: 'transactional',
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Brevo SMS API error ${response.status}: ${errText}`);
+  }
+}
+
+// เช็คตอน server เริ่มทำงานว่าตั้งค่า Brevo ไว้หรือยัง (ช่วย debug)
+if (!process.env.BREVO_API_KEY || !(process.env.BREVO_SENDER_EMAIL || process.env.SMTP_FROM || process.env.SMTP_USER)) {
+  console.warn('⚠️ ยังไม่ได้ตั้งค่า BREVO_API_KEY / BREVO_SENDER_EMAIL — ฟีเจอร์ส่งอีเมล OTP จะใช้งานไม่ได้');
+} else {
+  console.log('✅ พร้อมส่งอีเมลผ่าน Brevo API');
+}
 
 // ✅ Health-check endpoint แบบเบาที่สุด — ไม่แตะฐานข้อมูลเลย ใช้ให้บริการ ping
 // ภายนอก (เช่น UptimeRobot / cron-job.org) เรียกเป็นระยะเพื่อกัน Render แพ็กเกจฟรี
@@ -530,7 +577,7 @@ app.post('/api/auth/request-email-change', (req, res) => {
     return res.json({ success: false, message: 'กรุณากรอกอีเมลใหม่' });
   }
 
-  db.query('SELECT id FROM users WHERE email = ?', [newEmail], (err, results) => {
+  db.query('SELECT id FROM users WHERE email = ?', [newEmail], async (err, results) => {
     if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
     if (results.length > 0) {
       return res.json({ success: false, message: 'อีเมลนี้ถูกใช้งานแล้ว' });
@@ -543,9 +590,8 @@ app.post('/api/auth/request-email-change', (req, res) => {
       expiresAt: Date.now() + 10 * 60 * 1000, // หมดอายุใน 10 นาที
     };
 
-    transporter.sendMail(
-      {
-        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    try {
+      await sendEmailViaBrevo({
         to: newEmail,
         subject: 'รหัส OTP สำหรับยืนยันการเปลี่ยนอีเมล',
         html: `
@@ -554,19 +600,16 @@ app.post('/api/auth/request-email-change', (req, res) => {
           <p>รหัสนี้จะหมดอายุภายใน 10 นาที</p>
           <p>หากคุณไม่ได้เป็นผู้ขอเปลี่ยนอีเมล กรุณาเพิกเฉยต่ออีเมลฉบับนี้</p>
         `,
-      },
-      (err) => {
-        if (err) {
-          console.error('❌ ส่งอีเมลไม่สำเร็จ:', err.message);
-          delete otpStore[`email_change_${userId}`];
-          return res.json({ success: false, message: 'ส่งอีเมลไม่สำเร็จ กรุณาลองใหม่' });
-        }
-        res.json({
-          success: true,
-          message: 'ส่งรหัส OTP ไปที่อีเมลใหม่แล้ว กรุณาตรวจสอบกล่องจดหมาย',
-        });
-      }
-    );
+      });
+      res.json({
+        success: true,
+        message: 'ส่งรหัส OTP ไปที่อีเมลใหม่แล้ว กรุณาตรวจสอบกล่องจดหมาย',
+      });
+    } catch (mailErr) {
+      console.error('❌ ส่งอีเมลไม่สำเร็จ:', mailErr.message);
+      delete otpStore[`email_change_${userId}`];
+      res.json({ success: false, message: 'ส่งอีเมลไม่สำเร็จ กรุณาลองใหม่' });
+    }
   });
 });
 
@@ -682,63 +725,105 @@ app.post('/api/user/avatar', upload.single('avatar'), async (req, res) => {
 });
 
 
-// ===== FORGOT PASSWORD (ขอ OTP) =====
+// ===== FORGOT PASSWORD (ขอ OTP) — รองรับทั้งอีเมลและเบอร์โทร =====
 app.post('/api/auth/forgot-password', (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.json({ success: false, message: 'กรุณากรอกอีเมล' });
+  const { email, phone } = req.body;
+  if (!email && !phone) {
+    return res.json({ success: false, message: 'กรุณากรอกอีเมลหรือเบอร์โทรศัพท์' });
+  }
 
-  db.query('SELECT id FROM users WHERE email = ?', [email], (err, results) => {
-    if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
-    if (results.length === 0) {
-      return res.json({ success: false, message: 'ไม่พบบัญชีที่ใช้อีเมลนี้' });
-    }
+  if (email) {
+    // ----- ช่องทางอีเมล (โค้ดเดิม ไม่เปลี่ยนพฤติกรรม) -----
+    db.query('SELECT id FROM users WHERE email = ?', [email], async (err, results) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
+      if (results.length === 0) {
+        return res.json({ success: false, message: 'ไม่พบบัญชีที่ใช้อีเมลนี้' });
+      }
 
-    const otp = String(Math.floor(100000 + Math.random() * 900000)); // เลข 6 หลัก
-    otpStore[email] = { otp, expiresAt: Date.now() + 10 * 60 * 1000 }; // หมดอายุใน 10 นาที
+      const otp = String(Math.floor(100000 + Math.random() * 900000)); // เลข 6 หลัก
+      otpStore[email] = { otp, expiresAt: Date.now() + 10 * 60 * 1000 }; // หมดอายุใน 10 นาที
 
-    // ✅ ส่งอีเมลจริงผ่าน Gmail
-    transporter.sendMail(
-      {
-        from: process.env.SMTP_FROM || process.env.SMTP_USER,
-        to: email,
-        subject: 'รหัส OTP สำหรับรีเซ็ตรหัสผ่าน',
-        html: `
-          <p>รหัส OTP สำหรับรีเซ็ตรหัสผ่านของคุณคือ:</p>
-          <h2 style="letter-spacing:4px">${otp}</h2>
-          <p>รหัสนี้จะหมดอายุภายใน 10 นาที</p>
-          <p>หากคุณไม่ได้เป็นผู้ขอรีเซ็ตรหัสผ่าน กรุณาเพิกเฉยต่ออีเมลฉบับนี้</p>
-        `,
-      },
-      (err, info) => {
-        if (err) {
-          console.error('❌ ส่งอีเมลไม่สำเร็จ:', err.message);
-          delete otpStore[email];
-          return res.json({ success: false, message: 'ส่งอีเมลไม่สำเร็จ กรุณาลองใหม่' });
-        }
+      // ✅ ส่งอีเมลจริงผ่าน Brevo API (ไม่ใช่ SMTP ตรงๆ แล้ว — Render บล็อก SMTP ขาออก)
+      try {
+        await sendEmailViaBrevo({
+          to: email,
+          subject: 'รหัส OTP สำหรับรีเซ็ตรหัสผ่าน',
+          html: `
+            <p>รหัส OTP สำหรับรีเซ็ตรหัสผ่านของคุณคือ:</p>
+            <h2 style="letter-spacing:4px">${otp}</h2>
+            <p>รหัสนี้จะหมดอายุภายใน 10 นาที</p>
+            <p>หากคุณไม่ได้เป็นผู้ขอรีเซ็ตรหัสผ่าน กรุณาเพิกเฉยต่ออีเมลฉบับนี้</p>
+          `,
+        });
         console.log(`📩 ส่ง OTP ไปที่ ${email} สำเร็จ`);
         res.json({
           success: true,
           message: 'ส่งรหัส OTP ไปที่อีเมลของคุณแล้ว กรุณาตรวจสอบกล่องจดหมาย',
         });
+      } catch (mailErr) {
+        console.error('❌ ส่งอีเมลไม่สำเร็จ:', mailErr.message);
+        delete otpStore[email];
+        res.json({ success: false, message: 'ส่งอีเมลไม่สำเร็จ กรุณาลองใหม่' });
       }
-    );
+    });
+    return;
+  }
+
+  // ----- ช่องทางเบอร์โทร (ใหม่) — เบอร์อยู่ในตาราง customers/garages ไม่ได้อยู่ใน
+  // users โดยตรง เลยต้อง JOIN หา user_id ก่อน (เหมือนหลักการตอน login ที่ query ทั้ง
+  // สองตารางเพราะยังไม่รู้ userType ล่วงหน้า) -----
+  const lookupSql = `
+    SELECT u.id, u.email FROM users u JOIN customers c ON c.user_id = u.id WHERE c.phone = ?
+    UNION
+    SELECT u.id, u.email FROM users u JOIN garages g ON g.user_id = u.id WHERE g.phone = ?
+  `;
+  db.query(lookupSql, [phone, phone], async (err, results) => {
+    if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+    if (results.length === 0) {
+      return res.json({ success: false, message: 'ไม่พบบัญชีที่ใช้เบอร์โทรนี้' });
+    }
+
+    const userId = results[0].id;
+    const otp = String(Math.floor(100000 + Math.random() * 900000)); // เลข 6 หลัก
+    // ✅ เก็บ record ด้วย key แยกจากช่องทางอีเมล (prefix "phone_") กัน key ชนกัน
+    // และเก็บ userId ที่ resolve ไว้แล้ว ตอน reset-password จะได้ไม่ต้อง JOIN ซ้ำ
+    otpStore[`phone_${phone}`] = { otp, expiresAt: Date.now() + 10 * 60 * 1000, userId };
+
+    try {
+      await sendSmsViaBrevo({
+        to: phone,
+        content: `รหัส OTP สำหรับรีเซ็ตรหัสผ่าน (อู่ที่ไว้วางใจ) คือ ${otp} หมดอายุใน 10 นาที`,
+      });
+      console.log(`📩 ส่ง OTP SMS ไปที่ ${phone} สำเร็จ`);
+      res.json({
+        success: true,
+        message: 'ส่งรหัส OTP ไปที่เบอร์โทรศัพท์ของคุณแล้ว',
+      });
+    } catch (smsErr) {
+      console.error('❌ ส่ง SMS ไม่สำเร็จ:', smsErr.message);
+      delete otpStore[`phone_${phone}`];
+      res.json({ success: false, message: 'ส่ง SMS ไม่สำเร็จ กรุณาลองใหม่' });
+    }
   });
 });
 
-// ===== RESET PASSWORD (ยืนยัน OTP + ตั้งรหัสผ่านใหม่) =====
+// ===== RESET PASSWORD (ยืนยัน OTP + ตั้งรหัสผ่านใหม่) — รองรับทั้งอีเมลและเบอร์โทร =====
 app.post('/api/auth/reset-password', async (req, res) => {
-  const { email, otp, newPassword } = req.body;
+  const { email, phone, otp, newPassword } = req.body;
 
-  if (!email || !otp || !newPassword) {
+  if ((!email && !phone) || !otp || !newPassword) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
 
-  const record = otpStore[email];
+  // ✅ ต้องใช้ key เดียวกับตอนขอ OTP — ฝั่งอีเมลใช้ key = email ตรงๆ (โค้ดเดิม)
+  // ฝั่งเบอร์โทรใช้ key = "phone_<เบอร์>" (ดู forgot-password ด้านบน)
+  const key = email ? email : `phone_${phone}`;
+  const record = otpStore[key];
   if (!record) {
     return res.json({ success: false, message: 'กรุณาขอรหัส OTP ใหม่อีกครั้ง' });
   }
   if (Date.now() > record.expiresAt) {
-    delete otpStore[email];
+    delete otpStore[key];
     return res.json({ success: false, message: 'รหัส OTP หมดอายุแล้ว กรุณาขอใหม่' });
   }
   if (record.otp !== otp) {
@@ -747,15 +832,15 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
   try {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    db.query(
-      'UPDATE users SET password = ? WHERE email = ?',
-      [hashedPassword, email],
-      (err) => {
-        if (err) return res.json({ success: false, message: 'เปลี่ยนรหัสผ่านไม่สำเร็จ: ' + err.message });
-        delete otpStore[email]; // ใช้แล้วลบทิ้ง
-        res.json({ success: true, message: 'เปลี่ยนรหัสผ่านสำเร็จ' });
-      }
-    );
+    // ✅ ฝั่งอีเมล UPDATE ด้วย email ตรงๆ เหมือนเดิม ส่วนฝั่งเบอร์โทรไม่มีคอลัมน์ phone
+    // อยู่ในตาราง users เลย UPDATE ด้วย id ที่ resolve ไว้แล้วตอนขอ OTP แทน
+    const sql = email ? 'UPDATE users SET password = ? WHERE email = ?' : 'UPDATE users SET password = ? WHERE id = ?';
+    const params = email ? [hashedPassword, email] : [hashedPassword, record.userId];
+    db.query(sql, params, (err) => {
+      if (err) return res.json({ success: false, message: 'เปลี่ยนรหัสผ่านไม่สำเร็จ: ' + err.message });
+      delete otpStore[key]; // ใช้แล้วลบทิ้ง
+      res.json({ success: true, message: 'เปลี่ยนรหัสผ่านสำเร็จ' });
+    });
   } catch (e) {
     res.json({ success: false, message: 'เกิดข้อผิดพลาดภายในระบบ' });
   }
