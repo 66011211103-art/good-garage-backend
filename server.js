@@ -94,7 +94,7 @@ async function sendEmailViaBrevo({ to, subject, html }) {
       Accept: 'application/json',
     },
     body: JSON.stringify({
-      sender: { email: senderEmail, name: 'อู่ที่ไว้วางใจ' },
+      sender: { email: senderEmail, name: 'Good Garage' }, // ✅ เปลี่ยนชื่อผู้ส่งที่คนเห็นในอีเมลตามคำขอ
       to: [{ email: to }],
       subject,
       htmlContent: html,
