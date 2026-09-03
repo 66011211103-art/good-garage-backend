@@ -1,4 +1,10 @@
 -- migration_commission_payment_status.sql
+-- ⚠️ ไฟล์นี้เขียนเป็น MySQL syntax (ดู "วิธีรัน" ด้านล่าง) แต่ backend จริงต่อ
+-- PostgreSQL ผ่าน Supabase — รันไฟล์นี้ตรงๆ กับ Supabase ไม่ผ่านแน่นอน (backtick,
+-- COMMENT/AFTER ใน ALTER TABLE, ADD KEY, UPDATE...JOIN...SET ไม่มีใน Postgres)
+-- ใช้ migration_commission_payment_status_pg.sql (เวอร์ชัน Postgres ที่ถูกต้อง,
+-- รันซ้ำได้อย่างปลอดภัย) แทนไฟล์นี้ — เก็บไฟล์นี้ไว้อ้างอิงเจตนาเดิมเฉยๆ
+--
 -- ทำให้ commission_transactions แต่ละแถวมี "สถานะการจ่าย" ของตัวเอง
 -- (unpaid / pending_confirmation / paid) แทนที่จะให้อู่กรอกยอดเติมเงินเอาเอง
 -- เพื่อรองรับหน้า "ค่าคอมมิชชั่นที่ค้างจ่าย" แบบเลือกจ่ายทีละงาน
