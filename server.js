@@ -268,14 +268,16 @@ const kNewGarageWelcomeCredit = 300;
 
 // ===== REGISTER =====
 app.post('/api/auth/register', async (req, res) => {
-  const { firstName, lastName, phone, email, password, userType } = req.body;
+  const { firstName, lastName, phone, password, userType } = req.body;
+  // ✅ ตัดช่องว่างหน้า-หลังอีเมล + แปลงเป็นตัวพิมพ์เล็กทั้งหมด เพื่อกันสมัครซ้ำด้วยอีเมลที่ต่างเคส/เว้นวรรคกันเท่านั้น
+  const email = (req.body.email || '').trim().toLowerCase();
 
   if (!email || !password || !userType) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
 
   try {
-    db.query('SELECT id FROM users WHERE email = ?', [email], async (err, results) => {
+    db.query('SELECT id FROM users WHERE LOWER(email) = ?', [email], async (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
       if (results.length > 0) {
         return res.json({ success: false, message: 'อีเมลนี้ถูกใช้งานแล้ว' });
@@ -324,7 +326,9 @@ app.post('/api/auth/register', async (req, res) => {
 
 // ===== LOGIN =====
 app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
+  const { password } = req.body;
+  // ✅ ตัดช่องว่างหน้า-หลัง + ไม่สนตัวพิมพ์เล็ก/ใหญ่ ก่อนเช็ค (Art@Gmail.com กับ art@gmail.com ถือเป็นอีเมลเดียวกัน)
+  const email = (req.body.email || '').trim().toLowerCase();
 
   if (!email || !password) {
     return res.json({ success: false, message: 'กรุณากรอกอีเมลและรหัสผ่าน' });
@@ -344,7 +348,7 @@ app.post('/api/auth/login', (req, res) => {
      FROM users u
      LEFT JOIN customers c ON c.user_id = u.id
      LEFT JOIN garages g ON g.user_id = u.id
-     WHERE u.email = ?`,
+     WHERE LOWER(u.email) = ?`,
     [email],
     async (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
@@ -576,12 +580,14 @@ app.get('/api/user/profile', (req, res) => {
 
 // ===== REQUEST EMAIL CHANGE (ส่ง OTP ไปอีเมลใหม่เพื่อยืนยันว่าเป็นเจ้าของจริง) =====
 app.post('/api/auth/request-email-change', (req, res) => {
-  const { userId, newEmail } = req.body;
+  const { userId } = req.body;
+  // ✅ ตัดช่องว่างหน้า-หลัง + แปลงเป็นตัวพิมพ์เล็กอีเมลใหม่เช่นกัน
+  const newEmail = (req.body.newEmail || '').trim().toLowerCase();
   if (!userId || !newEmail) {
     return res.json({ success: false, message: 'กรุณากรอกอีเมลใหม่' });
   }
 
-  db.query('SELECT id FROM users WHERE email = ?', [newEmail], async (err, results) => {
+  db.query('SELECT id FROM users WHERE LOWER(email) = ?', [newEmail], async (err, results) => {
     if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
     if (results.length > 0) {
       return res.json({ success: false, message: 'อีเมลนี้ถูกใช้งานแล้ว' });
@@ -731,14 +737,16 @@ app.post('/api/user/avatar', upload.single('avatar'), async (req, res) => {
 
 // ===== FORGOT PASSWORD (ขอ OTP) — รองรับทั้งอีเมลและเบอร์โทร =====
 app.post('/api/auth/forgot-password', (req, res) => {
-  const { email, phone } = req.body;
+  let { email, phone } = req.body;
+  // ✅ ตัดช่องว่างหน้า-หลัง + แปลงเป็นตัวพิมพ์เล็กก่อนเช็ค เพื่อให้ key ที่เก็บ OTP ตรงกับอีเมลที่ reset-password จะใช้ค้นหาอีกที
+  if (email) email = String(email).trim().toLowerCase();
   if (!email && !phone) {
     return res.json({ success: false, message: 'กรุณากรอกอีเมลหรือเบอร์โทรศัพท์' });
   }
 
   if (email) {
     // ----- ช่องทางอีเมล (โค้ดเดิม ไม่เปลี่ยนพฤติกรรม) -----
-    db.query('SELECT id FROM users WHERE email = ?', [email], async (err, results) => {
+    db.query('SELECT id FROM users WHERE LOWER(email) = ?', [email], async (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
       if (results.length === 0) {
         return res.json({ success: false, message: 'ไม่พบบัญชีที่ใช้อีเมลนี้' });
@@ -813,7 +821,9 @@ app.post('/api/auth/forgot-password', (req, res) => {
 
 // ===== RESET PASSWORD (ยืนยัน OTP + ตั้งรหัสผ่านใหม่) — รองรับทั้งอีเมลและเบอร์โทร =====
 app.post('/api/auth/reset-password', async (req, res) => {
-  const { email, phone, otp, newPassword } = req.body;
+  let { email, phone, otp, newPassword } = req.body;
+  // ✅ ต้องตัดช่องว่าง-เล็ก/ใหญ่เหมือนที่ forgot-password ทำไว้ ไม่งั้น key ของ otpStore จะไม่ตรงกัน
+  if (email) email = String(email).trim().toLowerCase();
 
   if ((!email && !phone) || !otp || !newPassword) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
@@ -838,7 +848,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     // ✅ ฝั่งอีเมล UPDATE ด้วย email ตรงๆ เหมือนเดิม ส่วนฝั่งเบอร์โทรไม่มีคอลัมน์ phone
     // อยู่ในตาราง users เลย UPDATE ด้วย id ที่ resolve ไว้แล้วตอนขอ OTP แทน
-    const sql = email ? 'UPDATE users SET password = ? WHERE email = ?' : 'UPDATE users SET password = ? WHERE id = ?';
+    const sql = email ? 'UPDATE users SET password = ? WHERE LOWER(email) = ?' : 'UPDATE users SET password = ? WHERE id = ?';
     const params = email ? [hashedPassword, email] : [hashedPassword, record.userId];
     db.query(sql, params, (err) => {
       if (err) return res.json({ success: false, message: 'เปลี่ยนรหัสผ่านไม่สำเร็จ: ' + err.message });
@@ -1181,13 +1191,15 @@ app.put('/api/repair-requests/:id/status', async (req, res) => {
 
 // ===== เพิ่มบัญชีช่างใหม่ (อู่กรอกอีเมล+รหัสผ่านให้ช่างเอง) =====
 app.post('/api/technicians', async (req, res) => {
-  const { garageId, name, phone, email, password, specialties } = req.body;
+  const { garageId, name, phone, password, specialties } = req.body;
+  // ✅ ตัดช่องว่างหน้า-หลัง + แปลงเป็นตัวพิมพ์เล็กเหมือนจุดอื่นๆ
+  const email = (req.body.email || '').trim().toLowerCase();
   if (!garageId || !name || !email || !password) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
 
   try {
-    db.query('SELECT id FROM users WHERE email = ?', [email], async (err, existing) => {
+    db.query('SELECT id FROM users WHERE LOWER(email) = ?', [email], async (err, existing) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
       if (existing.length > 0) {
         return res.json({ success: false, message: 'อีเมลนี้ถูกใช้งานแล้ว' });
