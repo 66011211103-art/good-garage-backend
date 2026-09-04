@@ -8,8 +8,39 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const http = require('http'); // ✅ ต้องใช้ http server ดิบ เพื่อแนบ Socket.IO เข้าไปด้วย
-const { Server } = require('socket.io'); // ✅ ใช้ Socket.IO แทน Firebase Cloud Messaging
+const { Server } = require('socket.io'); // ✅ Socket.IO — ใช้ตอนแอปเปิดอยู่ (foreground/background) เท่านั้น
+const admin = require('firebase-admin'); // ✅ เพิ่มใหม่: Firebase Admin SDK — ส่ง FCM ตอนแอปปิดสนิท (Socket.IO ทำไม่ได้)
 const { uploadToSupabase, publicUrlFor } = require('./supabase_storage'); // ✅ เก็บรูปที่ Supabase Storage แทนดิสก์ของ Render (ดิสก์เป็น ephemeral หายทุกครั้งที่ redeploy)
+
+// ✅ เพิ่มใหม่: ตั้งค่า Firebase Admin SDK สำหรับส่ง push notification จริงตอนแอปปิดสนิท
+// (ฝั่ง Flutter มี firebase_core/firebase_messaging + ลงทะเบียน FCM token ไว้แล้ว แต่ backend
+// ไม่เคยมีฝั่งนี้เลย ทำให้ตอนแอปปิดสนิทไม่มีทางได้รับแจ้งเตือนจริงๆ)
+//
+// รองรับ 2 วิธีตั้งค่า (เลือกอย่างใดอย่างหนึ่งก็พอ):
+// 1) ตัวแปรแวดล้อม FIREBASE_SERVICE_ACCOUNT_JSON = เนื้อหา JSON ทั้งไฟล์ของ service account
+//    key (ก็อปวางเป็น env var เดียว) — สะดวกสุดสำหรับ deploy บน Render (ตั้งใน Environment)
+// 2) ไฟล์ firebase-service-account.json วางไว้ในโฟลเดอร์เดียวกับ server.js นี้
+//
+// ถ้ายังไม่ได้ตั้งค่าทั้งสองแบบ (ยังไม่ได้โหลด service account key จาก Firebase Console มา)
+// ระบบจะไม่ error แต่จะข้ามการส่ง FCM ไปเงียบๆ (sendFcmPushNotification จะเช็ค firebaseApp
+// ก่อนทุกครั้ง) — แอปยังใช้งานได้ปกติทุกอย่าง แค่จะยังแจ้งเตือนได้เฉพาะตอนเปิดแอปอยู่เหมือนเดิม
+let firebaseApp = null;
+try {
+  let serviceAccount = null;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  } else if (fs.existsSync(path.join(__dirname, 'firebase-service-account.json'))) {
+    serviceAccount = require('./firebase-service-account.json');
+  }
+  if (serviceAccount) {
+    firebaseApp = admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    console.log('✅ Firebase Admin SDK พร้อมใช้งาน — ส่งแจ้งเตือนตอนแอปปิดสนิทได้แล้ว');
+  } else {
+    console.log('⚠️ ยังไม่ได้ตั้งค่า Firebase service account (FIREBASE_SERVICE_ACCOUNT_JSON หรือไฟล์ firebase-service-account.json) — แจ้งเตือนจะยังทำงานได้แค่ตอนเปิดแอปอยู่ผ่าน Socket.IO เท่านั้น');
+  }
+} catch (fbInitErr) {
+  console.log('⚠️ ตั้งค่า Firebase Admin SDK ไม่สำเร็จ:', fbInitErr.message);
+}
 
 // ✅ แก้บั๊กจริง (ต่อจาก family: 4 ที่ใส่ในตัว transporter ด้านล่างแล้วยังไม่ได้ผล):
 // เช็คซอร์สโค้ดของ nodemailer แล้วพบว่า option "family" ที่ส่งเข้า
@@ -62,12 +93,58 @@ io.on('connection', (socket) => {
 // (ข้อจำกัดของ Socket.IO เทียบกับ Firebase คือต้องเปิดแอปทิ้งไว้ถึงจะได้รับ)
 function sendPushNotification(userId, userType, title, body, data = {}) {
   const socketId = connectedUsers[`${userType}_${userId}`];
-  if (!socketId) {
-    console.log(`⚠️ ไม่พบ socket ของ ${userType}_${userId} (ผู้ใช้อาจไม่ได้เปิดแอปอยู่)`);
-    return;
+  if (socketId) {
+    io.to(socketId).emit('notification', { title, body, data });
+    console.log('✅ ส่งแจ้งเตือน real-time (Socket.IO) สำเร็จ:', title);
+  } else {
+    console.log(`⚠️ ไม่พบ socket ของ ${userType}_${userId} (ผู้ใช้อาจไม่ได้เปิดแอปอยู่) — ลองส่งผ่าน FCM แทน`);
   }
-  io.to(socketId).emit('notification', { title, body, data });
-  console.log('✅ ส่งแจ้งเตือน real-time สำเร็จ:', title);
+
+  // ✅ เพิ่มใหม่: ส่งผ่าน Firebase Cloud Messaging (FCM) คู่กันไปด้วยเสมอ (ไม่ใช่แค่ตอน
+  // socket ไม่เชื่อมต่อ) — ฝั่งแอป (socket_notification_service.dart) เช็ค foreground เอง
+  // อยู่แล้วว่าจะโชว์แจ้งเตือนซ้ำจาก FCM ไหม (ข้ามถ้า Socket.IO โชว์ให้แล้ว) เพื่อให้แน่ใจว่า
+  // ต่อให้แอปปิดสนิทไปแล้วก็ยังได้รับแจ้งเตือนจริง ไม่ใช่แค่ตอนเปิดแอปอยู่เท่านั้น
+  sendFcmPushNotification(userId, title, body, data);
+}
+
+// ✅ เพิ่มใหม่: ส่งแจ้งเตือนผ่าน Firebase Cloud Messaging (แม้แอปปิดสนิท) — ใช้ token ที่
+// เก็บไว้จาก PUT /api/users/:id/fcm-token ถ้ายังไม่ได้ตั้งค่า Firebase Admin SDK
+// (ดูด้านบนสุดของไฟล์) หรือผู้ใช้ยังไม่เคยมี token บันทึกไว้ ก็แค่ข้ามไปเงียบๆ
+function sendFcmPushNotification(userId, title, body, data = {}) {
+  if (!firebaseApp) return;
+  db.query('SELECT fcm_token FROM users WHERE id = ?', [userId], async (err, rows) => {
+    if (err || rows.length === 0 || !rows[0].fcm_token) return;
+    const token = rows[0].fcm_token;
+    try {
+      // ✅ FCM บังคับให้ค่าใน data ต้องเป็น string ล้วนเท่านั้น (ไม่รับ number/boolean/object ตรงๆ)
+      const stringData = {};
+      Object.keys(data || {}).forEach((k) => {
+        stringData[k] = String(data[k]);
+      });
+      await admin.messaging().send({
+        token,
+        notification: { title, body },
+        data: stringData,
+        android: {
+          priority: 'high',
+          notification: { channelId: 'garage_app_channel' },
+        },
+        apns: {
+          payload: { aps: { sound: 'default' } },
+        },
+      });
+      console.log('✅ ส่งแจ้งเตือน FCM (ทำงานได้แม้แอปปิดสนิท) สำเร็จ:', title);
+    } catch (fcmErr) {
+      console.log('⚠️ ส่งแจ้งเตือน FCM ไม่สำเร็จ:', fcmErr.message);
+      // ✅ token หมดอายุ/ไม่ถูกต้องแล้ว (เช่น ผู้ใช้ถอนแอปออกไป) — ล้างออกจาก DB กันส่งซ้ำไปเรื่อยๆ ทุกครั้ง
+      if (
+        fcmErr.code === 'messaging/registration-token-not-registered' ||
+        fcmErr.code === 'messaging/invalid-registration-token'
+      ) {
+        db.query('UPDATE users SET fcm_token = NULL WHERE id = ?', [userId]);
+      }
+    }
+  });
 }
 
 
@@ -344,7 +421,9 @@ app.post('/api/auth/login', (req, res) => {
             g.shop_name AS garage_shop_name, g.owner_name AS garage_owner_name, g.phone AS garage_phone,
             g.address AS garage_address, g.avatar AS garage_avatar, g.hours_weekday AS garage_hours_weekday,
             g.hours_weekend AS garage_hours_weekend, g.services AS garage_services,
-            g.latitude AS garage_latitude, g.longitude AS garage_longitude
+            g.latitude AS garage_latitude, g.longitude AS garage_longitude,
+            g.bank_name AS garage_bank_name, g.bank_account_number AS garage_bank_account_number,
+            g.bank_account_name AS garage_bank_account_name, g.promptpay_id AS garage_promptpay_id
      FROM users u
      LEFT JOIN customers c ON c.user_id = u.id
      LEFT JOIN garages g ON g.user_id = u.id
@@ -445,6 +524,13 @@ app.post('/api/auth/login', (req, res) => {
           services: user.garage_services,
           latitude: user.garage_latitude,
           longitude: user.garage_longitude,
+          // ✅ แก้บั๊ก: เดิม login ไม่ส่งข้อมูลบัญชีธนาคารกลับมาเลยสักครั้ง ทำให้
+          // session ที่บันทึกไว้ (SessionStore ใน main.dart) ไม่มีข้อมูลชุดนี้ตั้งแต่
+          // ต้น พอเปิดหน้า "บัญชีรับชำระเงิน" จะเจอช่องว่างเปล่าแม้จะเคยบันทึกไปแล้ว
+          bank_name: user.garage_bank_name,
+          bank_account_number: user.garage_bank_account_number,
+          bank_account_name: user.garage_bank_account_name,
+          promptpay_id: user.garage_promptpay_id,
         };
 
         // services เก็บเป็น JSON string ใน DB -> แปลงกลับเป็น array ก่อนส่งให้ Flutter
@@ -537,15 +623,39 @@ app.put('/api/user/update', (req, res) => {
   }
 });
 
+// ===== เพิ่มใหม่: บันทึก/อัปเดต FCM token ของเครื่องนี้ =====
+// เรียกจากฝั่งแอปทุกครั้งหลังล็อกอินสำเร็จ และทุกครั้งที่ FCM token รีเฟรช (ดู
+// _setupFcm() ใน socket_notification_service.dart) — เก็บไว้ใน users.fcm_token
+// เพื่อให้ sendFcmPushNotification() ด้านบนใช้ส่งแจ้งเตือนตอนแอปปิดสนิทได้จริง
+app.put('/api/users/:id/fcm-token', (req, res) => {
+  const { id } = req.params;
+  const { fcmToken } = req.body;
+
+  if (!fcmToken) return res.json({ success: false, message: 'ไม่พบ fcmToken' });
+
+  db.query('UPDATE users SET fcm_token = ? WHERE id = ?', [fcmToken, id], (err, result) => {
+    if (err) return res.json({ success: false, message: 'บันทึก token ไม่สำเร็จ: ' + err.message });
+    if (result.affectedRows === 0) {
+      return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
+    }
+    res.json({ success: true, message: 'บันทึก FCM token สำเร็จ' });
+  });
+});
+
 // ===== GET PROFILE =====
 // ✅ JOIN ตาราง users เพื่อดึง email กลับมาด้วย (ไม่งั้น email จะหายไปตอน refresh)
 app.get('/api/user/profile', (req, res) => {
   const { userId, userType } = req.query;
   const table = userType === 'customer' ? 'customers' : 'garages';
   const alias = 't';
+  // ✅ แก้บั๊ก: เดิม cols ฝั่งอู่ไม่ดึงคอลัมน์บัญชีธนาคาร (bank_name/bank_account_number/
+  // bank_account_name/promptpay_id) เลยสักตัว ทำให้ทุกครั้งที่แอปโหลดโปรไฟล์ใหม่ (เช่น
+  // เปิดแอปใหม่หลังปิดสนิท ที่ session ที่บันทึกไว้ก็ไม่มีข้อมูลชุดนี้ตั้งแต่ตอนล็อกอินอยู่แล้ว)
+  // หน้าบัญชีรับชำระเงิน (bank_settings_page.dart) จะเห็นช่องว่างเปล่าทั้งที่จริงๆ เคย
+  // บันทึกไว้แล้วในฐานข้อมูล ผู้ใช้เลยรู้สึกว่าต้องกรอกใหม่ทุกรอบ
   const cols = userType === 'customer'
     ? `${alias}.first_name, ${alias}.last_name, ${alias}.phone, ${alias}.address, ${alias}.car_model, ${alias}.car_plate, ${alias}.avatar, ${alias}.latitude, ${alias}.longitude`
-    : `${alias}.shop_name, ${alias}.owner_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.hours_weekday, ${alias}.hours_weekend, ${alias}.services, ${alias}.latitude, ${alias}.longitude`;
+    : `${alias}.shop_name, ${alias}.owner_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.hours_weekday, ${alias}.hours_weekend, ${alias}.services, ${alias}.latitude, ${alias}.longitude, ${alias}.bank_name, ${alias}.bank_account_number, ${alias}.bank_account_name, ${alias}.promptpay_id`;
 
   db.query(
     `SELECT ${cols}, u.email
@@ -1303,21 +1413,31 @@ app.put('/api/repair-requests/:id/assign', (req, res) => {
       if (err) return res.json({ success: false, message: 'มอบหมายงานไม่สำเร็จ: ' + err.message });
       res.json({ success: true, message: 'มอบหมายงานสำเร็จ' });
 
-      // ✅ แจ้งเตือนช่างว่าได้รับมอบหมายงานใหม่
+      // ✅ แจ้งเตือนช่างว่าได้รับมอบหมายงานใหม่ + แจ้งลูกค้าว่ามีการมอบหมายช่างให้งานของตนแล้ว
       db.query(
-        `SELECT t.user_id, rr.problem_category
+        `SELECT t.user_id, t.name AS technician_name, rr.problem_category, rr.customer_id
          FROM technicians t, repair_requests rr
          WHERE t.id = ? AND rr.id = ?`,
         [technicianId, id],
         (err2, results) => {
           if (err2 || results.length === 0) return;
-          const { user_id, problem_category } = results[0];
+          const { user_id, technician_name, problem_category, customer_id } = results[0];
           sendPushNotification(
             user_id,
             'technician',
             'ได้รับมอบหมายงานใหม่ 🔧',
             `${problem_category || 'งานซ่อม'}`,
             { type: 'new_assignment', requestId: id }
+          );
+
+          // ✅ ใหม่ — เดิม endpoint นี้แจ้งเตือนแค่ฝั่งช่างเท่านั้น ลูกค้าไม่รู้เลยว่ามีการ
+          // มอบหมายช่างให้งานของตนแล้ว เพิ่มแจ้งเตือนฝั่งลูกค้าด้วยตามที่ขอ "ทุกขั้นตอนที่ส่งถึงกัน"
+          sendPushNotification(
+            customer_id,
+            'customer',
+            'อู่มอบหมายช่างให้งานของคุณแล้ว 🔧',
+            technician_name ? `ช่าง ${technician_name} รับผิดชอบงานซ่อมของคุณ` : 'มีช่างรับผิดชอบงานซ่อมของคุณแล้ว',
+            { type: 'technician_assigned', requestId: id }
           );
         }
       );
@@ -1401,6 +1521,35 @@ app.post('/api/repair-logs', (req, res) => {
       (err2) => {
         if (err2) return res.json({ success: false, message: 'บันทึกไม่สำเร็จ: ' + err2.message });
         res.json({ success: true, message: 'บันทึกความคืบหน้าสำเร็จ' });
+
+        // ✅ ใหม่ — เดิม endpoint นี้ไม่ส่งการแจ้งเตือนเลยแม้แต่รายการเดียว ทำให้ลูกค้า/อู่
+        // ไม่รู้เลยว่ามีการบันทึกความคืบหน้างานซ่อมใหม่ (โน้ต/อะไหล่/รูป) เพิ่มแจ้งเตือนทั้งสองฝั่ง
+        db.query(
+          `SELECT rr.customer_id, rr.garage_id, g.shop_name
+           FROM repair_requests rr
+           JOIN garages g ON g.user_id = rr.garage_id
+           WHERE rr.id = ?`,
+          [repairRequestId],
+          (err3, results) => {
+            if (err3 || results.length === 0) return;
+            const { customer_id, garage_id, shop_name } = results[0];
+            const hasPhotos = photoFilenames.length > 0;
+            sendPushNotification(
+              customer_id,
+              'customer',
+              'มีความคืบหน้างานซ่อมใหม่ 📝',
+              hasPhotos ? `${shop_name}: อัปเดตความคืบหน้าพร้อมรูปภาพ` : `${shop_name}: อัปเดตความคืบหน้างานซ่อมของคุณ`,
+              { type: 'repair_log', requestId: repairRequestId }
+            );
+            sendPushNotification(
+              garage_id,
+              'repair',
+              'บันทึกความคืบหน้างานซ่อมใหม่ 📝',
+              `งาน #REQ${repairRequestId.toString().padStart(6, '0')} มีการอัปเดตความคืบหน้า`,
+              { type: 'repair_log', requestId: repairRequestId }
+            );
+          }
+        );
       }
     );
   });
@@ -1564,7 +1713,7 @@ app.put('/api/reviews/:id', (req, res) => {
     }
 
     // ✅ ตรวจสิทธิ์ก่อน — ต้องเป็นรีวิวของ customerId คนนี้เท่านั้นถึงจะแก้ไขได้
-    db.query('SELECT customer_id FROM reviews WHERE id = ?', [id], (err, rows) => {
+    db.query('SELECT customer_id, garage_id FROM reviews WHERE id = ?', [id], (err, rows) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
       if (rows.length === 0) return res.json({ success: false, message: 'ไม่พบรีวิวนี้' });
       if (String(rows[0].customer_id) !== String(customerId)) {
@@ -1591,6 +1740,16 @@ app.put('/api/reviews/:id', (req, res) => {
         (err2) => {
           if (err2) return res.json({ success: false, message: 'แก้ไขรีวิวไม่สำเร็จ: ' + err2.message });
           res.json({ success: true, message: 'แก้ไขรีวิวเรียบร้อยแล้ว' });
+
+          // ✅ ใหม่ — เดิมแจ้งเตือนอู่แค่ตอนรีวิวใหม่ (POST) แต่ตอนลูกค้าแก้ไขรีวิวเดิม (PUT)
+          // ไม่เคยแจ้งอู่เลย เพิ่มแจ้งเตือนตรงนี้ด้วย
+          sendPushNotification(
+            rows[0].garage_id,
+            'repair',
+            'ลูกค้าแก้ไขรีวิว ⭐',
+            'มีการแก้ไขรีวิวของงานซ่อมที่ผ่านมา',
+            { type: 'review_edited', reviewId: id }
+          );
         }
       );
     });
@@ -1680,6 +1839,18 @@ app.put('/api/reviews/:id/reply', (req, res) => {
         return res.json({ success: false, message: 'ไม่พบรีวิวนี้ หรือไม่มีสิทธิ์ตอบกลับ' });
       }
       res.json({ success: true, message: 'ตอบกลับรีวิวสำเร็จ' });
+
+      // ✅ ใหม่ — เดิม endpoint นี้ไม่แจ้งเตือนลูกค้าเลยว่าอู่ตอบกลับรีวิวของตนแล้ว
+      db.query('SELECT customer_id FROM reviews WHERE id = ?', [id], (err2, rows) => {
+        if (err2 || rows.length === 0) return;
+        sendPushNotification(
+          rows[0].customer_id,
+          'customer',
+          'อู่ตอบกลับรีวิวของคุณแล้ว 💬',
+          reply.toString().trim(),
+          { type: 'review_reply', reviewId: id }
+        );
+      });
     }
   );
 });
@@ -2088,6 +2259,28 @@ app.put('/api/quotations/:id', (req, res) => {
         return res.json({ success: false, message: 'ไม่พบใบเสนอราคานี้' });
       }
       res.json({ success: true, message: 'แก้ไขใบเสนอราคาสำเร็จ' });
+
+      // ✅ ใหม่ — เดิมแจ้งเตือนลูกค้าแค่ตอนสร้างใบเสนอราคาครั้งแรก (POST) แต่ตอนอู่แก้ไข
+      // ใบเสนอราคาที่ส่งไปแล้ว (PUT) ไม่เคยแจ้งลูกค้าเลย เพิ่มแจ้งเตือนตรงนี้ด้วย
+      db.query(
+        `SELECT rr.customer_id, g.shop_name
+         FROM quotations q
+         JOIN repair_requests rr ON rr.id = q.repair_request_id
+         JOIN garages g ON g.user_id = rr.garage_id
+         WHERE q.id = ?`,
+        [id],
+        (err2, results) => {
+          if (err2 || results.length === 0) return;
+          const { customer_id, shop_name } = results[0];
+          sendPushNotification(
+            customer_id,
+            'customer',
+            'ใบเสนอราคาได้รับการแก้ไข 📋',
+            `${shop_name} แก้ไขใบเสนอราคา รวม ${totalPrice.toLocaleString()} บาท`,
+            { type: 'quotation_updated', quotationId: id }
+          );
+        }
+      );
     }
   );
 });
