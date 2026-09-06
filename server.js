@@ -2845,14 +2845,23 @@ app.get('/api/admin/complaints', (req, res) => {
     // ✅ แก้ไข: ผู้แจ้ง (reporter_id) อาจเป็นลูกค้า/เจ้าของอู่/ช่างก็ได้ (ดู POST /api/complaints
     // ด้านบน — ทุก userType แจ้งได้) เดิม JOIN แค่ตาราง customers ทำให้ถ้าอู่หรือช่างเป็นคน
     // แจ้งเอง ชื่อผู้แจ้งจะว่างเปล่าในหน้าแอดมิน — ใช้ COALESCE ไล่ดูทั้ง 3 ตารางแทน
-    `SELECT cp.id, cp.subject, cp.detail, cp.status, cp.created_at,
+    //
+    // ✅ เพิ่มใหม่: reporter_id, reporter_email, reporter_status — เดิมหน้าแอดมินเห็นแค่
+    // หัวข้อข้อร้องเรียนในตาราง กดดูรายละเอียด (cp.detail) ไม่ได้เลย และกรณีเป็น "อุทธรณ์
+    // บัญชีถูกระงับ" ก็ไม่รู้ด้วยว่าบัญชีนั้นยังถูกระงับอยู่ไหม ต้องสลับไปหน้า "บัญชีผู้ใช้งาน"
+    // เองเพื่อเช็ค/ปลดระงับ — ตอนนี้ส่งข้อมูลนี้มาด้วย ให้ฝั่งแอดมินโชว์ในกล่องรายละเอียด +
+    // ปลดระงับได้จากตรงนั้นเลย ระบบจะได้สอดคล้องกัน ไม่ต้องสลับหน้าไปมา
+    `SELECT cp.id, cp.reporter_id, cp.subject, cp.detail, cp.status, cp.created_at,
             COALESCE(
               NULLIF(TRIM(CONCAT(c.first_name, ' ', c.last_name)), ''),
               rg.owner_name,
               rt.name
             ) AS reporter_name,
+            u.email AS reporter_email,
+            u.status AS reporter_status,
             g.shop_name AS garage_name
      FROM complaints cp
+     LEFT JOIN users u ON u.id = cp.reporter_id
      LEFT JOIN customers c ON c.user_id = cp.reporter_id
      LEFT JOIN garages rg ON rg.user_id = cp.reporter_id
      LEFT JOIN technicians rt ON rt.user_id = cp.reporter_id

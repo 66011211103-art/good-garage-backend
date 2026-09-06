@@ -11,6 +11,23 @@
   .tabs { display: flex; gap: 8px; margin-bottom: 18px; }
   .stars { color: var(--warning); letter-spacing: 1px; }
   .comment-cell { max-width: 280px; }
+
+  /* ✅ เพิ่มใหม่: กล่องรายละเอียดข้อร้องเรียน (คลิก "ดูรายละเอียด" ในตารางข้อร้องเรียน) */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; padding: 20px;
+  }
+  .modal-card {
+    background: var(--panel); border-radius: 16px; padding: 24px;
+    width: 100%; max-width: 480px; max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+  }
+  .modal-card h2 { margin: 0 0 16px; font-size: 18px; }
+  .modal-row { margin-bottom: 14px; }
+  .modal-row .label { font-size: 12px; color: var(--text-mute); margin-bottom: 4px; font-weight: 600; }
+  .modal-row .value { font-size: 14.5px; color: var(--text-main); white-space: pre-wrap; word-break: break-word; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 </style>
 </head>
 <body>
@@ -50,6 +67,42 @@
       </table>
     </div>
   </main>
+  </div>
+
+  <!-- ✅ เพิ่มใหม่: กล่องรายละเอียดข้อร้องเรียน — เดิมกดดูรายละเอียดเต็มไม่ได้เลย ต้องเดา
+       จากแค่หัวข้อในตาราง กรณีเป็น "อุทธรณ์บัญชีถูกระงับ" ก็ปลดระงับได้จากตรงนี้เลย -->
+  <div class="modal-overlay" id="complaintModalOverlay" style="display:none;" onclick="if (event.target === this) closeComplaintModal();">
+    <div class="modal-card">
+      <h2>รายละเอียดข้อร้องเรียน</h2>
+      <div class="modal-row">
+        <div class="label">ผู้แจ้ง</div>
+        <div class="value" id="cmReporter">-</div>
+      </div>
+      <div class="modal-row" id="cmStatusRow">
+        <div class="label">สถานะบัญชีผู้แจ้งตอนนี้</div>
+        <div class="value" id="cmReporterStatus">-</div>
+      </div>
+      <div class="modal-row">
+        <div class="label">เรื่อง</div>
+        <div class="value" id="cmSubject">-</div>
+      </div>
+      <div class="modal-row">
+        <div class="label">รายละเอียด</div>
+        <div class="value" id="cmDetail">-</div>
+      </div>
+      <div class="modal-row">
+        <div class="label">อู่ที่เกี่ยวข้อง</div>
+        <div class="value" id="cmGarage">-</div>
+      </div>
+      <div class="modal-row">
+        <div class="label">วันที่แจ้ง</div>
+        <div class="value" id="cmDate">-</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-mini btn-amber" id="cmUnsuspendBtn" style="display:none;" onclick="unsuspendReporterFromModal()">ปลดระงับบัญชีนี้</button>
+        <button class="btn-mini" onclick="closeComplaintModal()">ปิด</button>
+      </div>
+    </div>
   </div>
 
 <script src="admin-shell.js"></script>
@@ -111,6 +164,7 @@
         <td class="muted">${escapeHtml(c.garage_name || '-')}</td>
         <td>${badge(c.status === 'resolved' ? 'แก้ไขแล้ว' : 'รอดำเนินการ', c.status === 'resolved' ? 'success' : 'warning')}</td>
         <td class="actions">
+          <button class="btn-mini" onclick="viewComplaint(${c.id})">ดูรายละเอียด</button>
           <button class="btn-mini btn-green" onclick="resolveComplaint(${c.id})">แก้ไขแล้ว</button>
           <button class="btn-mini btn-red" onclick="removeComplaint(${c.id})">ลบ</button>
         </td>
@@ -169,6 +223,62 @@
     const data = await res.json();
     toast(data.message, data.success);
     if (data.success) loadComplaints();
+  }
+
+  // ✅ เพิ่มใหม่: กล่องรายละเอียดข้อร้องเรียน — เก็บ id ที่กำลังเปิดดูอยู่ไว้ใน
+  // currentComplaintId เพื่อให้ปุ่ม "ปลดระงับบัญชีนี้" รู้ว่าจะปลดระงับ user คนไหน
+  let currentComplaintId = null;
+
+  function viewComplaint(id) {
+    const c = allComplaints.find(x => x.id === id);
+    if (!c) return;
+    currentComplaintId = id;
+
+    document.getElementById('cmReporter').textContent =
+      `${c.reporter_name || '-'}${c.reporter_email ? ' (' + c.reporter_email + ')' : ''}`;
+    document.getElementById('cmSubject').textContent = c.subject || '-';
+    document.getElementById('cmDetail').textContent = c.detail && c.detail.trim() ? c.detail : '— ไม่ได้กรอกรายละเอียดเพิ่มเติม —';
+    document.getElementById('cmGarage').textContent = c.garage_name || '-';
+    document.getElementById('cmDate').textContent = formatDate(c.created_at);
+
+    // ✅ โชว์สถานะบัญชีผู้แจ้งตอนนี้ + ปุ่มปลดระงับ ถ้ายังถูกระงับอยู่จริง — ทำให้แอดมิน
+    // จัดการ "อุทธรณ์บัญชีถูกระงับ" ได้จบในหน้าเดียว ไม่ต้องสลับไปหน้าบัญชีผู้ใช้งานเอง
+    const statusRow = document.getElementById('cmStatusRow');
+    const unsuspendBtn = document.getElementById('cmUnsuspendBtn');
+    if (c.reporter_status) {
+      const suspended = c.reporter_status === 'suspended';
+      statusRow.style.display = '';
+      document.getElementById('cmReporterStatus').innerHTML = badge(suspended ? 'ถูกระงับ' : 'ใช้งานปกติ', suspended ? 'danger' : 'success');
+      unsuspendBtn.style.display = suspended ? '' : 'none';
+    } else {
+      // ไม่พบบัญชีผู้แจ้งแล้ว (เช่นถูกลบไปแล้ว) — ซ่อนแถวสถานะและปุ่มปลดระงับไปเลย
+      statusRow.style.display = 'none';
+      unsuspendBtn.style.display = 'none';
+    }
+
+    document.getElementById('complaintModalOverlay').style.display = 'flex';
+  }
+
+  function closeComplaintModal() {
+    document.getElementById('complaintModalOverlay').style.display = 'none';
+    currentComplaintId = null;
+  }
+
+  async function unsuspendReporterFromModal() {
+    const c = allComplaints.find(x => x.id === currentComplaintId);
+    if (!c || !c.reporter_id) return;
+    const res = await fetch(`${API_BASE}/admin/users/${c.reporter_id}/status`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active' }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) {
+      // ✅ อัปเดตสถานะในกล่องที่เปิดค้างอยู่ทันที ไม่ต้องปิด-เปิดใหม่ถึงจะเห็นผล
+      c.reporter_status = 'active';
+      document.getElementById('cmReporterStatus').innerHTML = badge('ใช้งานปกติ', 'success');
+      document.getElementById('cmUnsuspendBtn').style.display = 'none';
+    }
   }
 
   loadReviews();
