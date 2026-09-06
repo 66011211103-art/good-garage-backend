@@ -423,7 +423,8 @@ app.post('/api/auth/login', (req, res) => {
             g.hours_weekend AS garage_hours_weekend, g.services AS garage_services,
             g.latitude AS garage_latitude, g.longitude AS garage_longitude,
             g.bank_name AS garage_bank_name, g.bank_account_number AS garage_bank_account_number,
-            g.bank_account_name AS garage_bank_account_name, g.promptpay_id AS garage_promptpay_id
+            g.bank_account_name AS garage_bank_account_name, g.promptpay_id AS garage_promptpay_id,
+            g.id AS garage_row_id, g.status AS garage_status, g.suspend_reason AS garage_suspend_reason
      FROM users u
      LEFT JOIN customers c ON c.user_id = u.id
      LEFT JOIN garages g ON g.user_id = u.id
@@ -461,6 +462,23 @@ app.post('/api/auth/login', (req, res) => {
             suspended: true,
             userId: user.id,
             reason: user.suspend_reason || null,
+          },
+        });
+      }
+
+      // ✅ เพิ่มใหม่: อู่ที่ถูกแอดมิน "ระงับ" จากหน้า admin/garages.html (garages.status = 'suspended')
+      // เดิมไม่เคยถูกเช็คตรงนี้เลย ทำให้เจ้าของอู่ยังล็อกอินและใช้งานได้ปกติทุกอย่างแม้อู่จะถูก
+      // ระงับไปแล้ว (สอดคล้องกับบั๊กเดียวกันที่เพิ่งแก้ไปสำหรับ users.status) — ใช้ response
+      // shape เดียวกับตอน users.status ถูกระงับทุกประการ (suspended/userId/reason) เพื่อให้ฝั่งแอป
+      // โชว์กล่องข้อความ + ปุ่มยื่นอุทธรณ์ได้ทันทีโดยไม่ต้องแก้โค้ด Flutter เพิ่มเลย
+      if (user.user_type === 'repair' && user.garage_status === 'suspended') {
+        return res.json({
+          success: false,
+          message: 'อู่ของคุณถูกระงับการใช้งาน',
+          data: {
+            suspended: true,
+            userId: user.id,
+            reason: user.garage_suspend_reason || null,
           },
         });
       }
@@ -800,7 +818,10 @@ app.get('/api/garages', (req, res) => {
                     COALESCE(AVG(rv.rating), 0) AS rating, COUNT(rv.id) AS review_count
              FROM garages g
              LEFT JOIN reviews rv ON rv.garage_id = g.user_id
-             WHERE 1=1`;
+             WHERE (g.status IS NULL OR g.status != 'suspended')`;
+  // ✅ แก้บั๊ก: เดิม endpoint นี้ไม่เคยเช็ค g.status เลย ทำให้อู่ที่แอดมินกด "ระงับ" จากหน้า
+  // admin/garages.html ยังโผล่ในผลค้นหาของลูกค้าปกติทุกอย่างเหมือนไม่มีอะไรเกิดขึ้น (บั๊กเดียว
+  // กับที่เพิ่งแก้ไปสำหรับ users.status) — ตอนนี้ซ่อนอู่ที่ถูกระงับออกจากผลค้นหาแล้ว
   const params = [];
 
   if (service) {
@@ -2704,13 +2725,18 @@ app.get('/api/admin/garages', (req, res) => {
 });
 
 // อนุมัติ/ปฏิเสธ/ระงับ/เปิดใช้งานอู่ (ครอบคลุมทั้งข้อ 1.3.4.4 และ 1.3.4.5)
+// ✅ เพิ่มใหม่: รับ reason ตอนกดระงับ (สาเหตุที่แอดมินกรอกในหน้า admin/garages.html)
+// เก็บลง garages.suspend_reason แล้วโชว์ให้เจ้าของอู่เห็นตอนพยายามล็อกอิน (ดู /api/auth/login)
+// เหมือนกับที่ทำไว้แล้วสำหรับ users.suspend_reason — ตั้งเป็น NULL อัตโนมัติทุกครั้งที่ไม่ใช่
+// การระงับ (เช่นกลับไป 'approved') เพื่อไม่ให้ค้างสาเหตุเก่าไว้เวลาระงับใหม่ในอนาคต
 app.put('/api/admin/garages/:id/status', (req, res) => {
   const { id } = req.params; // garages.id (primary key ของตารางเอง)
-  const { status } = req.body; // 'pending' | 'approved' | 'rejected' | 'suspended'
+  const { status, reason } = req.body; // 'pending' | 'approved' | 'rejected' | 'suspended'
   if (!['pending', 'approved', 'rejected', 'suspended'].includes(status)) {
     return res.json({ success: false, message: 'สถานะไม่ถูกต้อง' });
   }
-  db.query('UPDATE garages SET status = ? WHERE id = ?', [status, id], (err, result) => {
+  const suspendReason = status === 'suspended' ? (reason || null) : null;
+  db.query('UPDATE garages SET status = ?, suspend_reason = ? WHERE id = ?', [status, suspendReason, id], (err, result) => {
     if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
     if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบอู่นี้' });
     res.json({ success: true, message: 'อัปเดตสถานะอู่แล้ว' });
@@ -2859,6 +2885,8 @@ app.get('/api/admin/complaints', (req, res) => {
             ) AS reporter_name,
             u.email AS reporter_email,
             u.status AS reporter_status,
+            rg.id AS reporter_garage_id,
+            rg.status AS reporter_garage_status,
             g.shop_name AS garage_name
      FROM complaints cp
      LEFT JOIN users u ON u.id = cp.reporter_id

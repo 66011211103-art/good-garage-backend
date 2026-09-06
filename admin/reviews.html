@@ -82,6 +82,13 @@
         <div class="label">สถานะบัญชีผู้แจ้งตอนนี้</div>
         <div class="value" id="cmReporterStatus">-</div>
       </div>
+      <!-- ✅ เพิ่มใหม่: ถ้าผู้แจ้งเป็นเจ้าของอู่ (มี reporter_garage_id) โชว์สถานะ "อู่" แยกจาก
+           สถานะ "บัญชี" ด้านบน เพราะเป็นคนละสถานะกัน — เจ้าของอู่อาจถูกระงับแค่ตัวอู่
+           (garages.status) โดยที่บัญชีผู้ใช้ (users.status) ยังใช้งานได้ปกติก็ได้ -->
+      <div class="modal-row" id="cmGarageStatusRow" style="display:none;">
+        <div class="label">สถานะอู่ของผู้แจ้งตอนนี้</div>
+        <div class="value" id="cmReporterGarageStatus">-</div>
+      </div>
       <div class="modal-row">
         <div class="label">เรื่อง</div>
         <div class="value" id="cmSubject">-</div>
@@ -99,6 +106,7 @@
         <div class="value" id="cmDate">-</div>
       </div>
       <div class="modal-actions">
+        <button class="btn-mini btn-amber" id="cmUnsuspendGarageBtn" style="display:none;" onclick="unsuspendGarageFromModal()">ปลดระงับอู่นี้</button>
         <button class="btn-mini btn-amber" id="cmUnsuspendBtn" style="display:none;" onclick="unsuspendReporterFromModal()">ปลดระงับบัญชีนี้</button>
         <button class="btn-mini" onclick="closeComplaintModal()">ปิด</button>
       </div>
@@ -256,6 +264,22 @@
       unsuspendBtn.style.display = 'none';
     }
 
+    // ✅ เพิ่มใหม่: ถ้าผู้แจ้งเป็นเจ้าของอู่ (มี reporter_garage_id) โชว์สถานะอู่แยกต่างหาก
+    // พร้อมปุ่ม "ปลดระงับอู่นี้" ถ้าอู่ถูกระงับอยู่จริง — ทำให้กรณีอุทธรณ์ที่เกิดจากอู่ถูกระงับ
+    // (ไม่ใช่บัญชีผู้ใช้ถูกระงับ) จัดการได้จบในกล่องเดียวกันนี้เหมือนกัน ระบบจะได้สอดคล้องกัน
+    const garageStatusRow = document.getElementById('cmGarageStatusRow');
+    const unsuspendGarageBtn = document.getElementById('cmUnsuspendGarageBtn');
+    if (c.reporter_garage_id) {
+      const garageSuspended = c.reporter_garage_status === 'suspended';
+      garageStatusRow.style.display = '';
+      document.getElementById('cmReporterGarageStatus').innerHTML =
+        badge(garageSuspended ? 'อู่ถูกระงับ' : 'อู่ใช้งานปกติ', garageSuspended ? 'danger' : 'success');
+      unsuspendGarageBtn.style.display = garageSuspended ? '' : 'none';
+    } else {
+      garageStatusRow.style.display = 'none';
+      unsuspendGarageBtn.style.display = 'none';
+    }
+
     document.getElementById('complaintModalOverlay').style.display = 'flex';
   }
 
@@ -278,6 +302,25 @@
       c.reporter_status = 'active';
       document.getElementById('cmReporterStatus').innerHTML = badge('ใช้งานปกติ', 'success');
       document.getElementById('cmUnsuspendBtn').style.display = 'none';
+    }
+  }
+
+  // ✅ เพิ่มใหม่: ปลดระงับ "อู่" ของผู้แจ้ง (garages.status) — คนละ endpoint กับปลดระงับบัญชี
+  // เพราะอ้างอิงคนละคอลัมน์กัน (garages.id ของอู่ ไม่ใช่ users.id ของผู้แจ้ง) reason จะถูกล้าง
+  // อัตโนมัติที่ฝั่ง backend เมื่อ set กลับเป็น 'approved'
+  async function unsuspendGarageFromModal() {
+    const c = allComplaints.find(x => x.id === currentComplaintId);
+    if (!c || !c.reporter_garage_id) return;
+    const res = await fetch(`${API_BASE}/admin/garages/${c.reporter_garage_id}/status`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) {
+      c.reporter_garage_status = 'approved';
+      document.getElementById('cmReporterGarageStatus').innerHTML = badge('อู่ใช้งานปกติ', 'success');
+      document.getElementById('cmUnsuspendGarageBtn').style.display = 'none';
     }
   }
 
