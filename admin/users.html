@@ -105,9 +105,21 @@
   }
 
   async function toggleStatus(id, newStatus) {
+    // ✅ เพิ่มใหม่: ตอนกด "ระงับ" ต้องถามสาเหตุก่อนเสมอ — สาเหตุนี้จะถูกส่งไปโชว์ให้
+    // ผู้ใช้เห็นตอนพยายามล็อกอิน (ดู /api/auth/login ใน server.js) ไม่ใช่แค่เปลี่ยน
+    // สถานะเฉยๆ แบบเดิมอีกต่อไป ตอน "ปลดระงับ" ไม่ต้องถาม เพราะสาเหตุจะถูกล้างอัตโนมัติ
+    let reason = null;
+    if (newStatus === 'suspended') {
+      reason = prompt('กรุณาระบุสาเหตุที่ระงับบัญชีนี้\n(ผู้ใช้จะเห็นข้อความนี้ตอนพยายามล็อกอินเข้าแอป):');
+      if (reason === null) return; // กดยกเลิก -> ไม่ทำอะไรต่อ
+      if (!reason.trim()) {
+        toast('กรุณาระบุสาเหตุก่อนระงับบัญชี', false);
+        return;
+      }
+    }
     const res = await fetch(`${API_BASE}/admin/users/${id}/status`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify({ status: newStatus, reason }),
     });
     const data = await res.json();
     toast(data.message, data.success);

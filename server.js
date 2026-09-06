@@ -446,6 +446,25 @@ app.post('/api/auth/login', (req, res) => {
         return res.json({ success: false, message: 'รหัสผ่านไม่ถูกต้อง' });
       }
 
+      // ✅ แก้บั๊ก/เพิ่มใหม่: เดิมปุ่ม "ระงับ" ในหน้าแอดมินแค่เปลี่ยนค่า users.status
+      // เป็น 'suspended' ในฐานข้อมูลเฉยๆ แต่ตรงนี้ไม่เคยเช็คค่านี้เลย ทำให้บัญชีที่ถูก
+      // ระงับไปแล้วยังล็อกอินเข้าแอปได้ปกติทุกอย่าง — เช็คตรงนี้จุดเดียว ครอบคลุมทุก
+      // user_type (ลูกค้า/อู่/ช่าง/แอดมิน) เพราะ users.status ใช้ร่วมกันทุกประเภทบัญชี
+      // ส่ง suspend_reason (สาเหตุที่แอดมินกรอกไว้ตอนกดระงับ) กลับไปด้วย ให้ฝั่งแอป
+      // โชว์ให้ผู้ใช้เห็นว่าเพราะอะไร พร้อม userId ให้ฝั่งแอปใช้ยื่นอุทธรณ์ผ่าน
+      // /api/complaints ได้ทันทีโดยไม่ต้องล็อกอินสำเร็จก่อน
+      if (user.status === 'suspended') {
+        return res.json({
+          success: false,
+          message: 'บัญชีนี้ถูกระงับการใช้งาน',
+          data: {
+            suspended: true,
+            userId: user.id,
+            reason: user.suspend_reason || null,
+          },
+        });
+      }
+
       // ✅ ช่าง (technician) — ยังต้อง query แยกเพราะต้อง JOIN ตาราง garages ผ่าน garage_id ของช่างเอง
       // (ไม่ใช่ garages ที่ user_id ตรงกับตัวช่าง) จึงรวมกับ query แรกไม่ได้
       if (user.user_type === 'technician') {
@@ -2624,17 +2643,25 @@ app.get('/api/admin/users', (req, res) => {
 });
 
 // เปิด/ระงับการใช้งานบัญชี (ใช้ได้กับทุก user_type)
+// ✅ เพิ่มใหม่: รับสาเหตุ (reason) ที่แอดมินกรอกตอนกดระงับ เก็บไว้ใน suspend_reason
+// เพื่อให้ /api/auth/login โชว์สาเหตุนี้ให้ผู้ใช้เห็นตอนพยายามล็อกอิน — ตอนปลดระงับ
+// (status = 'active') จะล้าง suspend_reason กลับเป็น NULL ให้อัตโนมัติเสมอ
 app.put('/api/admin/users/:id/status', (req, res) => {
   const { id } = req.params;
-  const { status } = req.body; // 'active' | 'suspended'
+  const { status, reason } = req.body; // 'active' | 'suspended', reason: string|null
   if (!['active', 'suspended'].includes(status)) {
     return res.json({ success: false, message: 'สถานะไม่ถูกต้อง' });
   }
-  db.query('UPDATE users SET status = ? WHERE id = ?', [status, id], (err, result) => {
-    if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
-    if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
-    res.json({ success: true, message: status === 'suspended' ? 'ระงับบัญชีแล้ว' : 'เปิดใช้งานบัญชีแล้ว' });
-  });
+  const suspendReason = status === 'suspended' ? (reason || null) : null;
+  db.query(
+    'UPDATE users SET status = ?, suspend_reason = ? WHERE id = ?',
+    [status, suspendReason, id],
+    (err, result) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+      if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
+      res.json({ success: true, message: status === 'suspended' ? 'ระงับบัญชีแล้ว' : 'เปิดใช้งานบัญชีแล้ว' });
+    }
+  );
 });
 
 // ลบบัญชีผู้ใช้ถาวร — ถ้ามีข้อมูลอ้างอิงอยู่ (repair_requests/payments/ฯลฯ) DB จะกัน FK
