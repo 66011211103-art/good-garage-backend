@@ -807,7 +807,7 @@ app.post('/api/auth/confirm-email-change', (req, res) => {
 
 // ===== LIST / SEARCH GARAGES (สำหรับหน้า Dashboard ฝั่งลูกค้า) =====
 // รองรับ query param:
-//   service = ชื่อหมวดบริการ เช่น "ยาง" (กรองเฉพาะอู่ที่ตั้งราคาบริการนี้ไว้)
+//   service = ชื่อหมวดบริการ ต้องตรงกับ kGarageCategories ฝั่ง Flutter เป๊ะๆ เช่น "ยางและล้อ" (กรองเฉพาะอู่ที่ตั้งราคาบริการหมวดนี้ไว้)
 //   keyword = คำค้นชื่อร้าน
 app.get('/api/garages', (req, res) => {
   const { service, keyword } = req.query;
@@ -825,10 +825,14 @@ app.get('/api/garages', (req, res) => {
   const params = [];
 
   if (service) {
-    // services เก็บเป็น JSON string เช่น [{"name":"ยาง","price":"..."}]
-    // ใช้ LIKE ค้นหาแบบง่าย (เพียงพอสำหรับสเกลโปรเจกต์นี้)
+    // services เก็บเป็น JSON string เช่น [{"category":"ยางและล้อ","name":"ปะยางรถยนต์",...}]
+    // ✅ แก้บั๊ก: เดิมค้นหาจากฟิลด์ "name" (ชื่อบริการเฉพาะที่อู่พิมพ์เองอิสระ เช่น
+    // "ปะยางรถยนต์") ซึ่งแทบไม่มีทางตรงกับ "หมวดบริการ" ที่ลูกค้าเลือกกรอง (เช่น "ยางและล้อ")
+    // เลย ทำให้ลูกค้ากดหมวดบริการแล้วหาอู่ไม่เจอ ทั้งที่อู่เพิ่มบริการหมวดนั้นไว้แล้วจริง
+    // ตอนนี้ค้นหาจากฟิลด์ "category" (หมวดมาตรฐานที่อู่เลือกตอนเพิ่มบริการ) แทน ให้ตรงกับ
+    // ค่าที่ฝั่งลูกค้าใช้กรอง — ใช้ LIKE ค้นหาแบบง่าย (เพียงพอสำหรับสเกลโปรเจกต์นี้)
     sql += ' AND g.services LIKE ?';
-    params.push(`%"name":"${service}"%`);
+    params.push(`%"category":"${service}"%`);
   }
   if (keyword) {
     sql += ' AND g.shop_name LIKE ?';
