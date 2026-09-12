@@ -835,8 +835,12 @@ app.get('/api/garages', (req, res) => {
     params.push(`%"category":"${service}"%`);
   }
   if (keyword) {
-    sql += ' AND g.shop_name LIKE ?';
-    params.push(`%${keyword}%`);
+    // ✅ แก้บั๊ก: เดิมค้นหาแค่ชื่อร้าน (shop_name) เท่านั้น ทำให้พิมพ์คำอาการ/บริการ เช่น
+    // "ยาง" ในช่องค้นหาแล้วไม่เจออู่ที่เพิ่มบริการเกี่ยวกับยางไว้เลยถ้าชื่อร้านไม่มีคำว่า "ยาง"
+    // ตอนนี้ค้นหาทั้งชื่อร้านและข้อมูลบริการ (services) ด้วย — ครอบคลุมทั้งหมวดบริการ
+    // (category) และชื่อบริการเฉพาะที่อู่พิมพ์เอง (name) เพราะเก็บอยู่ใน JSON blob เดียวกัน
+    sql += ' AND (g.shop_name LIKE ? OR g.services LIKE ?)';
+    params.push(`%${keyword}%`, `%${keyword}%`);
   }
   sql += ' GROUP BY g.id';
 
