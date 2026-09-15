@@ -99,7 +99,10 @@
       return `
         <tr>
           <td>${escapeHtml(g.shop_name || '-')}</td>
-          <td style="color:${negative ? 'var(--danger)' : 'var(--success)'};font-weight:700;">฿${fmt(g.wallet_balance)}</td>
+          <td style="color:${negative ? 'var(--danger)' : 'var(--success)'};font-weight:700;">
+            ฿${fmt(g.wallet_balance)}
+            <button class="btn-mini" onclick="adjustWallet(${g.garage_id}, ${g.wallet_balance})" style="margin-left:6px;">แก้ไข</button>
+          </td>
           <td>
             <input type="number" class="rate-input" id="rate-${g.garage_id}" value="${g.commission_rate}" min="0" max="100" step="0.5">
             <button class="btn-mini btn-blue" onclick="saveRate(${g.garage_id})">บันทึก</button>
@@ -201,6 +204,26 @@
     const res = await fetch(`${API_BASE}/admin/garages/${garageId}/commission-rate`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ commissionRate: rate }),
+    });
+    const data = await res.json();
+    toast(data.message, data.success);
+    if (data.success) loadAll();
+  }
+
+  // ✅ ปรับยอด Wallet ตรงๆ ด้วยมือ — ใช้แก้ข้อมูลผิดพลาด/ยอดค้างจากข้อมูลทดสอบเก่าเท่านั้น
+  // ไม่ใช่ flow ปกติของระบบ (ปกติยอดจะเปลี่ยนอัตโนมัติจากการหักคอม/ยืนยันคำขอชำระค่าคอมเท่านั้น)
+  async function adjustWallet(garageId, currentBalance) {
+    const input = prompt(
+      `ปรับยอด Wallet ใหม่ (ปัจจุบัน ฿${fmt(currentBalance)})\nใช้สำหรับแก้ไขข้อมูลผิดพลาด/ยอดทดสอบเก่าเท่านั้น ไม่ใช่การหัก/เติมตามงานจริง:`,
+      currentBalance
+    );
+    if (input === null) return;
+    const newBalance = parseFloat(input);
+    if (isNaN(newBalance)) { toast('กรุณากรอกตัวเลขให้ถูกต้อง', false); return; }
+    if (!confirm(`ยืนยันเปลี่ยนยอด Wallet เป็น ฿${fmt(newBalance)}?`)) return;
+    const res = await fetch(`${API_BASE}/admin/garages/${garageId}/wallet-balance`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletBalance: newBalance }),
     });
     const data = await res.json();
     toast(data.message, data.success);

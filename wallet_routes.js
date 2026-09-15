@@ -292,5 +292,27 @@ module.exports = (pool, uploadSlip, toImageUrl, uploadToSupabase) => {
     }
   });
 
+  // ===== [แอดมิน] ปรับยอด Wallet ของอู่ด้วยตนเอง (แก้ไขข้อมูลผิดพลาด/ข้อมูลทดสอบเก่าเท่านั้น) =====
+  // ⚠️ นี่ไม่ใช่ flow ปกติของระบบ — ปกติยอด Wallet เปลี่ยนได้แค่ 2 ทาง: หักอัตโนมัติตอนลูกค้า
+  // ยืนยันจ่ายเงิน (deductCommission ใน commission.js) กับบวกคืนตอนแอดมินกด "ยืนยัน" คำขอ
+  // ชำระค่าคอม (route ด้านบน) route นี้ไว้สำหรับแก้ไขยอดที่ผิดเพี้ยนตรงๆ (เช่น ยอดค้างจาก
+  // ข้อมูลทดสอบก่อนขึ้นระบบจริง) ไม่ผูกกับ commission_transactions ใดๆ ทั้งสิ้น
+  router.put('/admin/garages/:garageId/wallet-balance', async (req, res) => {
+    try {
+      const { walletBalance } = req.body;
+      if (walletBalance === undefined || walletBalance === null || isNaN(Number(walletBalance))) {
+        return res.json({ success: false, message: 'กรุณาระบุยอด Wallet เป็นตัวเลข' });
+      }
+      await pool.query('UPDATE garages SET wallet_balance = ? WHERE user_id = ?', [
+        Number(walletBalance),
+        req.params.garageId,
+      ]);
+      res.json({ success: true, message: 'ปรับยอด Wallet สำเร็จ' });
+    } catch (err) {
+      console.error(err);
+      res.json({ success: false, message: 'เกิดข้อผิดพลาด' });
+    }
+  });
+
   return router;
 };
