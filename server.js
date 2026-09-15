@@ -2074,6 +2074,25 @@ app.put('/api/payments/:id/confirm', async (req, res) => {
             paymentId: Number(id),
             grossAmount: Number(payment.amount),
           });
+
+          // ✅ แจ้งเตือนอู่แบบ real-time ทันทีที่มีค่าคอมมิชชั่นใหม่ถูกหัก — ให้หน้า
+          // "Wallet ของอู่" อัปเดตจากสถานะ "ไม่มีค่าคอมค้างจ่าย" เป็นยอดที่ต้องจ่ายจริง
+          // ทันทีโดยไม่ต้องรอ pull-to-refresh เอง (ดู garage_wallet_page.dart ที่ฟัง
+          // type: 'commission_deducted' นี้อยู่) ข้ามถ้าหักซ้ำ (alreadyDeducted) หรือ
+          // commissionAmount = 0 (อัตราคอม 0% ไม่มีอะไรค้างจ่ายจริงๆ)
+          if (commissionResult && !commissionResult.alreadyDeducted && commissionResult.commissionAmount > 0) {
+            sendPushNotification(
+              payment.garage_id,
+              'repair',
+              'มีค่าคอมมิชชั่นใหม่ค้างจ่าย 💳',
+              `งานล่าสุดถูกหักค่าคอมมิชชั่น ฿${commissionResult.commissionAmount.toLocaleString('th-TH')} เข้ายอดค้างจ่ายแล้ว`,
+              {
+                type: 'commission_deducted',
+                repairRequestId: payment.repair_request_id,
+                commissionAmount: commissionResult.commissionAmount,
+              }
+            );
+          }
         }
       } catch (commissionErr) {
         // ⚠️ ไม่ทำให้การยืนยันรับเงินล้มเหลวไปด้วย ถ้าหักคอมมิชชั่นพลาด — เงินลูกค้า
