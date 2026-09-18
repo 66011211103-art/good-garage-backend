@@ -75,18 +75,31 @@
 
     tbody.innerHTML = rows.map(u => {
       const suspended = u.status === 'suspended';
+      // ✅ เพิ่มใหม่: บัญชีช่างที่ถูกลบ (soft delete — technicians.status = 'deleted')
+      // ต้องโชว์ต่างจาก "ระงับ" ปกติ และไม่ให้กดระงับ/ลบซ้ำได้อีก เพราะลบไปแล้วจริงๆ
+      // (ข้อมูลชื่อยังอยู่ในตารางแค่เพื่อรักษาความสัมพันธ์กับประวัติงานซ่อมเก่าเท่านั้น)
+      const techDeleted = u.user_type === 'technician' && u.technician_status === 'deleted';
+
+      const statusCell = techDeleted
+        ? badge('ลบแล้ว', 'muted')
+        : badge(suspended ? 'ระงับ' : 'ใช้งาน', suspended ? 'danger' : 'success');
+
+      const actionsCell = techDeleted
+        ? `<span class="muted">—</span>`
+        : `
+            <button class="btn-mini btn-amber" onclick="toggleStatus(${u.id}, '${suspended ? 'active' : 'suspended'}')">${suspended ? 'ปลดระงับ' : 'ระงับ'}</button>
+            <button class="btn-mini btn-red" onclick="removeUser(${u.id})">ลบ</button>
+          `;
+
       return `
         <tr>
           <td class="mono">#${u.id}</td>
           <td>${escapeHtml(u.display_name || '-')}</td>
           <td class="muted">${escapeHtml(u.email)}</td>
           <td>${roleLabel[u.user_type] || u.user_type}</td>
-          <td>${badge(suspended ? 'ระงับ' : 'ใช้งาน', suspended ? 'danger' : 'success')}</td>
+          <td>${statusCell}</td>
           <td class="muted">${formatDate(u.created_at)}</td>
-          <td class="actions">
-            <button class="btn-mini btn-amber" onclick="toggleStatus(${u.id}, '${suspended ? 'active' : 'suspended'}')">${suspended ? 'ปลดระงับ' : 'ระงับ'}</button>
-            <button class="btn-mini btn-red" onclick="removeUser(${u.id})">ลบ</button>
-          </td>
+          <td class="actions">${actionsCell}</td>
         </tr>`;
     }).join('');
   }

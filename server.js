@@ -498,7 +498,9 @@ app.post('/api/auth/login', (req, res) => {
             const profile = techResults[0] || {};
             profile.avatar = toImageUrl(profile.avatar);
 
-            if (profile.status === 'inactive') {
+            // ✅ เดิมเช็คแค่ status === 'inactive' — ตอนนี้ status มีค่า 'deleted' เพิ่มมา
+            // (ตอนอู่กด "ลบ" ช่าง) เช็คแบบ !== 'active' กันบัญชีที่ถูกลบล็อกอินเข้าได้ด้วย
+            if (profile.status !== 'active') {
               return res.json({ success: false, message: 'บัญชีนี้ถูกระงับการใช้งานแล้ว กรุณาติดต่ออู่' });
             }
 
@@ -1399,7 +1401,7 @@ app.get('/api/technicians', (req, res) => {
             ) AS active_job_count
      FROM technicians t
      JOIN users u ON u.id = t.user_id
-     WHERE t.garage_id = ?
+     WHERE t.garage_id = ? AND t.status != 'deleted'
      ORDER BY t.created_at DESC`,
     [garageId],
     (err, results) => {
@@ -1447,9 +1449,17 @@ app.put('/api/technicians/:id', (req, res) => {
 
 // ===== ลบบัญชีช่าง (ฝั่งอู่) =====
 // ✅ เพิ่มใหม่: กันลบช่างที่ยังมีงานค้างอยู่ (assigned/in_progress) ด้วยข้อความแนะนำให้
-// "ปิดใช้งาน" แทน — เดียวกับแนวทางที่ /api/admin/users ใช้กับบัญชีประเภทอื่น ลบบัญชี
-// users ที่ผูกกับช่างไปด้วยเสมอ (ไม่ใช่แค่ลบแถวใน technicians) กันบัญชีค้างล็อกอินได้
-// ทั้งที่ไม่มีข้อมูลช่างเหลืออยู่แล้ว
+// "ปิดใช้งาน" แทน
+//
+// ✅ แก้ไข (soft delete แทน hard delete): เดิม endpoint นี้ลบแถวใน users ตรงๆ ซึ่งชนกับ
+// FOREIGN KEY จาก repair_requests.assigned_technician_id -> technicians.id ทันทีที่ช่างคนนั้น
+// เคยมีประวัติงาน (แม้จะทำเสร็จไปนานแล้ว) ทำให้ลบไม่ได้เลย — ตามที่อู่แจ้งว่าอยากให้ลบได้จริง
+// แต่ "ต้องยังรู้ว่าใครเคยเป็นคนซ่อมงานเก่า" (ไว้ตรวจสอบย้อนหลังถ้าเกิดความเสียหาย) จึงเปลี่ยนมา
+// เป็น soft delete: ตั้ง technicians.status = 'deleted' แทนการลบแถวจริง
+//   - แถวใน technicians ยังอยู่ครบ → repair_requests เก่ายังอ้างอิงชื่อช่างที่ซ่อมได้เหมือนเดิม
+//   - GET /api/technicians (หน้าจัดการช่าง) กรอง status != 'deleted' ออก → ไม่โผล่ในรายชื่อ/
+//     ตัวเลือกมอบหมายงานอีกต่อไป เหมือนถูกลบจริงจากมุมมองอู่
+//   - /api/auth/login เช็ค profile.status !== 'active' → ช่างที่ถูกลบล็อกอินเข้าแอปไม่ได้อีก
 app.delete('/api/technicians/:id', (req, res) => {
   const { id } = req.params;
   const { garageId } = req.query;
@@ -1474,23 +1484,17 @@ app.delete('/api/technicians/:id', (req, res) => {
         });
       }
 
-      const { user_id } = results[0];
-      db.query('DELETE FROM users WHERE id = ?', [user_id], (err2, result2) => {
-        if (err2) {
-          // '23503' = Postgres foreign_key_violation — มีประวัติงานเก่าผูกอยู่ ลบไม่ได้ตรงๆ
-          if (err2.code === '23503') {
-            return res.json({
-              success: false,
-              message: 'ลบไม่ได้ เพราะมีประวัติงานซ่อมเก่าผูกอยู่กับช่างคนนี้ กรุณาปิดใช้งานแทน',
-            });
+      db.query(
+        `UPDATE technicians SET status = 'deleted' WHERE id = ? AND garage_id = ?`,
+        [id, garageId],
+        (err2, result2) => {
+          if (err2) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err2.message });
+          if (result2.affectedRows === 0) {
+            return res.json({ success: false, message: 'ไม่พบช่างนี้ หรือไม่มีสิทธิ์ลบ' });
           }
-          return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err2.message });
+          res.json({ success: true, message: 'ลบช่างสำเร็จ' });
         }
-        if (result2.affectedRows === 0) {
-          return res.json({ success: false, message: 'ไม่พบบัญชีนี้' });
-        }
-        res.json({ success: true, message: 'ลบช่างสำเร็จ' });
-      });
+      );
     }
   );
 });

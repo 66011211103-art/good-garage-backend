@@ -236,6 +236,9 @@ tbody td { padding: 12px 14px; vertical-align: middle; }
 .badge-warning { background: var(--warning-bg); color: var(--warning); }
 .badge-danger { background: var(--danger-bg); color: var(--danger); }
 .badge-info { background: var(--info-bg); color: var(--info); }
+/* ✅ เพิ่มใหม่: badge "ลบแล้ว" สำหรับบัญชีช่างที่ถูกลบ (soft delete) — ใช้สีเทากลาง
+   แยกจาก badge-danger ("ระงับ") เพราะสถานะไม่เหมือนกัน (ลบถาวร vs ระงับชั่วคราว) */
+.badge-muted { background: rgba(107,114,128,0.14); color: var(--text-mute); }
 
 /* ---------- Buttons ---------- */
 .actions { white-space: nowrap; }
