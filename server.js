@@ -2316,6 +2316,22 @@ app.post('/api/quotations', (req, res) => {
     ? Number(totalPriceFromClient)
     : partsCost + Number(laborCost);
 
+  // ✅ เพิ่มใหม่: กันอู่ส่งใบเสนอราคาให้คำขอที่ลูกค้ากด "ไม่ต้องการซ่อมแล้ว" (ยกเลิกถาวร)
+  // ไปแล้ว — เดิม endpoint นี้ไม่เช็คสถานะคำขอเลยก่อน insert เลยยังส่งใบใหม่ได้อยู่ดี
+  // ทั้งที่ลูกค้าปิดคำขอนี้ไปแล้วจริงๆ
+  db.query('SELECT status FROM repair_requests WHERE id = ?', [repairRequestId], (checkErr, checkResults) => {
+    if (checkErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + checkErr.message });
+    if (checkResults.length === 0) return res.json({ success: false, message: 'ไม่พบคำขอซ่อมนี้' });
+    if (checkResults[0].status === 'cancelled') {
+      return res.json({
+        success: false,
+        message: 'ลูกค้ายกเลิกคำขอซ่อมนี้แล้ว ไม่สามารถส่งใบเสนอราคาได้อีก',
+      });
+    }
+    insertQuotation();
+  });
+
+  function insertQuotation() {
   db.query(
     `INSERT INTO quotations
       (repair_request_id, items, labor_cost, parts_cost, total_price, estimated_start_date, estimated_end_date, notes)
@@ -2364,6 +2380,7 @@ app.post('/api/quotations', (req, res) => {
       );
     }
   );
+  }
 });
 
 // ===== UPDATE QUOTATION (อู่แก้ไขใบเสนอราคาที่ส่งไปแล้ว) =====
@@ -2458,11 +2475,16 @@ app.get('/api/quotations', (req, res) => {
 });
 
 // ===== RESPOND TO QUOTATION (ลูกค้ายืนยัน / ปฏิเสธใบเสนอราคา) =====
+// ✅ เพิ่ม 'cancelled' เข้ามาเป็นสถานะที่ 3 นอกจาก 'confirmed'/'rejected' — ตามที่ขอ
+// ให้ลูกค้ามีปุ่มแยก "ไม่ต้องการซ่อมแล้ว" ต่างจาก "ปฏิเสธใบเสนอราคานี้" (rejected) ตรงที่
+// rejected แค่ย้อนคำขอกลับเป็น 'accepted' ให้อู่ส่งใบเสนอราคาใหม่ได้อีก ส่วน cancelled
+// จะปิดคำขอซ่อมนี้ถาวร (repair_requests.status = 'cancelled') กันอู่ส่งใบเสนอราคาใหม่
+// อีกเลย (ดูเงื่อนไขกันใน POST /api/quotations ด้านล่าง)
 app.put('/api/quotations/:id/respond', (req, res) => {
   const { id } = req.params;
-  const { status, reason, customerId } = req.body; // 'confirmed' | 'rejected'
+  const { status, reason, customerId } = req.body; // 'confirmed' | 'rejected' | 'cancelled'
 
-  if (!['confirmed', 'rejected'].includes(status)) {
+  if (!['confirmed', 'rejected', 'cancelled'].includes(status)) {
     return res.json({ success: false, message: 'สถานะไม่ถูกต้อง' });
   }
   // ✅ เดิม endpoint นี้ไม่รับ/ไม่เช็ค customerId เลย — ใครก็ตามที่รู้/เดา id ของ
@@ -2482,7 +2504,7 @@ app.put('/api/quotations/:id/respond', (req, res) => {
      SET status = ?, customer_rejection_reason = ?, responded_at = NOW()
      FROM repair_requests rr
      WHERE rr.id = q.repair_request_id AND q.id = ? AND rr.customer_id = ?`,
-    [status, status === 'rejected' ? (reason || null) : null, id, customerId],
+    [status, status !== 'confirmed' ? (reason || null) : null, id, customerId],
     (err, result) => {
       if (err) return res.json({ success: false, message: 'อัปเดตไม่สำเร็จ: ' + err.message });
       if (result.affectedRows === 0) {
@@ -2490,11 +2512,14 @@ app.put('/api/quotations/:id/respond', (req, res) => {
       }
 
       // ✅ ยืนยัน -> คำขอซ่อมเปลี่ยนเป็น confirmed (เริ่มงานได้)
-      // ปฏิเสธ -> ย้อนกลับเป็น accepted (อู่ยังรับงานอยู่ แต่ต้องส่งใบเสนอราคาใหม่)
+      // ปฏิเสธ (แค่ใบนี้) -> ย้อนกลับเป็น accepted (อู่ยังรับงานอยู่ แต่ต้องส่งใบเสนอราคาใหม่)
+      // ยกเลิกถาวร (ไม่ต้องการซ่อมแล้ว) -> ปิดเป็น cancelled กันส่งใบเสนอราคาใหม่ได้อีกเลย
+      const newRequestStatus =
+        status === 'confirmed' ? 'confirmed' : status === 'cancelled' ? 'cancelled' : 'accepted';
       db.query(
         `UPDATE repair_requests SET status = ?
          WHERE id = (SELECT repair_request_id FROM quotations WHERE id = ?)`,
-        [status === 'confirmed' ? 'confirmed' : 'accepted', id],
+        [newRequestStatus, id],
         () => {
           res.json({ success: true, message: 'บันทึกการตอบกลับสำเร็จ' });
 
@@ -2508,15 +2533,21 @@ app.put('/api/quotations/:id/respond', (req, res) => {
             (err2, results) => {
               if (err2 || results.length === 0) return;
               const { garage_id, request_id } = results[0];
+              const titles = {
+                confirmed: 'ลูกค้ายืนยันใบเสนอราคาแล้ว ✅',
+                rejected: 'ลูกค้าปฏิเสธใบเสนอราคา',
+                cancelled: 'ลูกค้ายกเลิกคำขอซ่อมนี้แล้ว ❌',
+              };
+              const bodies = {
+                confirmed: 'เริ่มดำเนินการซ่อมได้เลย',
+                rejected: reason ? `เหตุผล: ${reason}` : 'กรุณาติดต่อลูกค้าเพื่อปรับใบเสนอราคา',
+                cancelled: `ลูกค้าไม่ต้องการซ่อมแล้ว ส่งใบเสนอราคาใหม่ให้คำขอนี้ไม่ได้อีก${reason ? ` — เหตุผล: ${reason}` : ''}`,
+              };
               sendPushNotification(
                 garage_id,
                 'repair',
-                status === 'confirmed' ? 'ลูกค้ายืนยันใบเสนอราคาแล้ว ✅' : 'ลูกค้าปฏิเสธใบเสนอราคา',
-                status === 'confirmed'
-                  ? 'เริ่มดำเนินการซ่อมได้เลย'
-                  : reason
-                  ? `เหตุผล: ${reason}`
-                  : 'กรุณาติดต่อลูกค้าเพื่อปรับใบเสนอราคา',
+                titles[status],
+                bodies[status],
                 { type: 'quotation_response', requestId: request_id }
               );
             }
@@ -2758,7 +2789,8 @@ app.get('/api/admin/users', (req, res) => {
               WHEN 'admin' THEN 'ผู้ดูแลระบบ'
               ELSE u.email
             END AS display_name,
-            g.id AS garage_row_id
+            g.id AS garage_row_id,
+            t.status AS technician_status
      FROM users u
      LEFT JOIN customers c ON c.user_id = u.id AND u.user_type = 'customer'
      LEFT JOIN garages g ON g.user_id = u.id AND u.user_type = 'repair'
@@ -2795,19 +2827,65 @@ app.put('/api/admin/users/:id/status', (req, res) => {
 
 // ลบบัญชีผู้ใช้ถาวร — ถ้ามีข้อมูลอ้างอิงอยู่ (repair_requests/payments/ฯลฯ) DB จะกัน FK
 // ไว้ไม่ให้ลบ ป้องกันข้อมูลอื่นพัง กรณีนี้แนะนำให้ "ระงับ" แทน
+//
+// ✅ แก้ไข: บัญชีประเภท "ช่าง" (user_type = 'technician') ขอให้แอดมินลบได้จริงเหมือนที่แก้ให้
+// ฝั่งอู่ไปแล้ว (ดู DELETE /api/technicians/:id) — เจาะจงเช็คก่อนว่าเป็นช่างไหม ถ้าใช่ให้ทำ
+// soft delete แบบเดียวกัน (ตั้ง technicians.status = 'deleted' แทนการลบแถว users ตรงๆ) เพื่อ
+// เก็บชื่อช่างไว้ในประวัติงานซ่อมเก่า กันงานที่มอบหมายค้างอยู่ด้วยเหมือนกัน ส่วนบัญชีประเภทอื่น
+// (ลูกค้า/อู่/แอดมิน) ยังใช้ hard delete + กัน FK แบบเดิม แนะนำให้ "ระงับ" แทนถ้าลบไม่ได้
 app.delete('/api/admin/users/:id', (req, res) => {
   const { id } = req.params;
-  db.query('DELETE FROM users WHERE id = ?', [id], (err, result) => {
-    if (err) {
-      // '23503' = Postgres foreign_key_violation (เทียบเท่า ER_ROW_IS_REFERENCED ของ MySQL)
-      if (err.code === '23503') {
-        return res.json({ success: false, message: 'ลบไม่ได้ เพราะมีข้อมูลอื่นผูกอยู่ (เช่น งานซ่อม/การชำระเงิน) กรุณาใช้ "ระงับ" แทน' });
-      }
-      return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+
+  db.query('SELECT user_type FROM users WHERE id = ?', [id], (userErr, userResults) => {
+    if (userErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + userErr.message });
+    if (userResults.length === 0) return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
+
+    if (userResults[0].user_type === 'technician') {
+      deleteTechnicianUser();
+      return;
     }
-    if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
-    res.json({ success: true, message: 'ลบบัญชีแล้ว' });
+    hardDeleteUser();
   });
+
+  function deleteTechnicianUser() {
+    db.query(
+      `SELECT t.id,
+              (SELECT COUNT(*) FROM repair_requests rr
+               WHERE rr.assigned_technician_id = t.id AND rr.status IN ('assigned','in_progress')
+              ) AS active_job_count
+       FROM technicians t WHERE t.user_id = ?`,
+      [id],
+      (err, results) => {
+        if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+        if (results.length === 0) return res.json({ success: false, message: 'ไม่พบข้อมูลช่างของบัญชีนี้' });
+        if (Number(results[0].active_job_count) > 0) {
+          return res.json({
+            success: false,
+            message: 'ลบไม่ได้ เพราะช่างคนนี้มีงานที่กำลังดำเนินการอยู่ กรุณา "ระงับ" แทน หรือรอให้งานเสร็จก่อน',
+          });
+        }
+        db.query(`UPDATE technicians SET status = 'deleted' WHERE id = ?`, [results[0].id], (err2, result2) => {
+          if (err2) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err2.message });
+          if (result2.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบข้อมูลช่างของบัญชีนี้' });
+          res.json({ success: true, message: 'ลบช่างสำเร็จ' });
+        });
+      }
+    );
+  }
+
+  function hardDeleteUser() {
+    db.query('DELETE FROM users WHERE id = ?', [id], (err, result) => {
+      if (err) {
+        // '23503' = Postgres foreign_key_violation (เทียบเท่า ER_ROW_IS_REFERENCED ของ MySQL)
+        if (err.code === '23503') {
+          return res.json({ success: false, message: 'ลบไม่ได้ เพราะมีข้อมูลอื่นผูกอยู่ (เช่น งานซ่อม/การชำระเงิน) กรุณาใช้ "ระงับ" แทน' });
+        }
+        return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+      }
+      if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
+      res.json({ success: true, message: 'ลบบัญชีแล้ว' });
+    });
+  }
 });
 
 // ============================================================
@@ -2891,7 +2969,7 @@ app.get('/api/admin/repairs', (req, res) => {
 app.put('/api/admin/repairs/:id/status', (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
-  const validStatuses = ['pending', 'accepted', 'quoted', 'confirmed', 'assigned', 'checking', 'in_progress', 'waiting_parts', 'completed', 'rejected'];
+  const validStatuses = ['pending', 'accepted', 'quoted', 'confirmed', 'assigned', 'checking', 'in_progress', 'waiting_parts', 'completed', 'rejected', 'cancelled'];
   if (!validStatuses.includes(status)) {
     return res.json({ success: false, message: 'สถานะไม่ถูกต้อง' });
   }
@@ -3231,7 +3309,7 @@ app.get('/api/admin/activity-feed', (req, res) => {
       ORDER BY u.created_at DESC LIMIT ?)
      UNION ALL
      (SELECT CONCAT('ส่งคำขอซ่อม: ', rr.problem_category), TRIM(CONCAT(c.first_name, ' ', c.last_name)), rr.created_at,
-             CASE rr.status WHEN 'rejected' THEN 'ยกเลิก' WHEN 'completed' THEN 'สำเร็จ' ELSE 'รอดำเนินการ' END
+             CASE rr.status WHEN 'rejected' THEN 'ยกเลิก' WHEN 'cancelled' THEN 'ยกเลิก' WHEN 'completed' THEN 'สำเร็จ' ELSE 'รอดำเนินการ' END
       FROM repair_requests rr JOIN customers c ON c.user_id = rr.customer_id
       ORDER BY rr.created_at DESC LIMIT ?)
      UNION ALL
