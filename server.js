@@ -1423,6 +1423,78 @@ app.put('/api/technicians/:id/status', (req, res) => {
   });
 });
 
+// ===== แก้ไขข้อมูลช่าง (ฝั่งอู่) — ชื่อ/เบอร์โทร/ความชำนาญ =====
+// ✅ เพิ่มใหม่: เดิมหน้าจัดการช่างมีแค่เพิ่ม/เปิด-ปิดใช้งาน ไม่มีทางแก้ไขข้อมูลที่กรอกผิด
+// ตอนสร้างเลย ต้องเช็ค garageId ให้ตรงกับเจ้าของช่างเสมอ กันอู่อื่นแก้ข้อมูลช่างอู่นี้
+app.put('/api/technicians/:id', (req, res) => {
+  const { id } = req.params;
+  const { garageId, name, phone, specialties } = req.body;
+  if (!garageId || !name) {
+    return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
+  }
+  db.query(
+    'UPDATE technicians SET name = ?, phone = ?, specialties = ? WHERE id = ? AND garage_id = ?',
+    [name, phone || null, specialties || null, id, garageId],
+    (err, result) => {
+      if (err) return res.json({ success: false, message: 'แก้ไขไม่สำเร็จ: ' + err.message });
+      if (result.affectedRows === 0) {
+        return res.json({ success: false, message: 'ไม่พบช่างนี้ หรือไม่มีสิทธิ์แก้ไข' });
+      }
+      res.json({ success: true, message: 'แก้ไขข้อมูลช่างสำเร็จ' });
+    }
+  );
+});
+
+// ===== ลบบัญชีช่าง (ฝั่งอู่) =====
+// ✅ เพิ่มใหม่: กันลบช่างที่ยังมีงานค้างอยู่ (assigned/in_progress) ด้วยข้อความแนะนำให้
+// "ปิดใช้งาน" แทน — เดียวกับแนวทางที่ /api/admin/users ใช้กับบัญชีประเภทอื่น ลบบัญชี
+// users ที่ผูกกับช่างไปด้วยเสมอ (ไม่ใช่แค่ลบแถวใน technicians) กันบัญชีค้างล็อกอินได้
+// ทั้งที่ไม่มีข้อมูลช่างเหลืออยู่แล้ว
+app.delete('/api/technicians/:id', (req, res) => {
+  const { id } = req.params;
+  const { garageId } = req.query;
+  if (!garageId) return res.json({ success: false, message: 'ไม่พบ garageId' });
+
+  db.query(
+    `SELECT t.user_id,
+            (SELECT COUNT(*) FROM repair_requests rr
+             WHERE rr.assigned_technician_id = t.id AND rr.status IN ('assigned','in_progress')
+            ) AS active_job_count
+     FROM technicians t WHERE t.id = ? AND t.garage_id = ?`,
+    [id, garageId],
+    (err, results) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+      if (results.length === 0) {
+        return res.json({ success: false, message: 'ไม่พบช่างนี้ หรือไม่มีสิทธิ์ลบ' });
+      }
+      if (Number(results[0].active_job_count) > 0) {
+        return res.json({
+          success: false,
+          message: 'ลบไม่ได้ เพราะช่างคนนี้มีงานที่กำลังดำเนินการอยู่ กรุณาปิดใช้งานแทน หรือรอให้งานเสร็จก่อน',
+        });
+      }
+
+      const { user_id } = results[0];
+      db.query('DELETE FROM users WHERE id = ?', [user_id], (err2, result2) => {
+        if (err2) {
+          // '23503' = Postgres foreign_key_violation — มีประวัติงานเก่าผูกอยู่ ลบไม่ได้ตรงๆ
+          if (err2.code === '23503') {
+            return res.json({
+              success: false,
+              message: 'ลบไม่ได้ เพราะมีประวัติงานซ่อมเก่าผูกอยู่กับช่างคนนี้ กรุณาปิดใช้งานแทน',
+            });
+          }
+          return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err2.message });
+        }
+        if (result2.affectedRows === 0) {
+          return res.json({ success: false, message: 'ไม่พบบัญชีนี้' });
+        }
+        res.json({ success: true, message: 'ลบช่างสำเร็จ' });
+      });
+    }
+  );
+});
+
 // ===== มอบหมายงานให้ช่าง =====
 app.put('/api/repair-requests/:id/assign', (req, res) => {
   const { id } = req.params;
@@ -2258,7 +2330,12 @@ app.post('/api/quotations', (req, res) => {
       if (err) return res.json({ success: false, message: 'สร้างใบเสนอราคาไม่สำเร็จ: ' + err.message });
 
       // ✅ อัปเดตสถานะคำขอซ่อมเป็น "quoted" (ส่งใบเสนอราคาแล้ว รอลูกค้ายืนยัน)
-      db.query('UPDATE repair_requests SET status = ? WHERE id = ?', ['quoted', repairRequestId]);
+      // ✅ เพิ่ม customer_seen = 0 พร้อมกัน — เดิมจุดนี้ไม่รีเซ็ตเลย ถ้าลูกค้าเคยเปิดดู
+      // คำขอนี้ตอนสถานะ "accepted" ไปแล้ว (customer_seen ถูกมาร์คเป็น 1 ไปแล้วจากตอนนั้น)
+      // พออู่ส่งใบเสนอราคาใหม่ สถานะเปลี่ยนเป็น "quoted" แต่ customer_seen ไม่ขยับ
+      // ทำให้ตัวเลขที่กระดิ่งฝั่งลูกค้าไม่ขึ้นแจ้งเตือนเลย (ต้องรอ mark-seen เงื่อนไข
+      // status != 'quoted' อยู่แล้ว เข้าเงื่อนไขเดียวกับตอนอู่ accepted/rejected คำขอ)
+      db.query('UPDATE repair_requests SET status = ?, customer_seen = 0 WHERE id = ?', ['quoted', repairRequestId]);
 
       res.json({ success: true, message: 'สร้างใบเสนอราคาสำเร็จ', data: { id: result.insertId } });
 
