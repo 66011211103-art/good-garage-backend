@@ -854,7 +854,12 @@ app.get('/api/garages', (req, res) => {
       } catch (e) {
         services = [];
       }
-      return { ...g, services, avatar: toImageUrl(g.avatar), rating: Number(g.rating) };
+      return {
+        ...g,
+        services,
+        avatar: toImageUrl(g.avatar),
+        rating: Number(g.rating),
+      };
     });
 
     res.json({ success: true, message: 'ดึงข้อมูลสำเร็จ', data: { garages } });
