@@ -123,9 +123,14 @@
       if (data.success) {
         allGarages = data.data.garages;
         render();
+      } else {
+        // ✅ แก้บั๊ก: เดิมถ้า backend ตอบ success:false (เช่น SQL error) หน้าจะค้างที่
+        // "กำลังโหลด..." เงียบๆ ตลอดไป ไม่มีข้อความบอกเลยว่าเกิดอะไรขึ้น
+        document.getElementById('tbody').innerHTML =
+          `<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ: ${escapeHtml(data.message || 'ไม่ทราบสาเหตุ')}</td></tr>`;
       }
     } catch (e) {
-      document.getElementById('tbody').innerHTML = '<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ</td></tr>';
+      document.getElementById('tbody').innerHTML = '<tr><td colspan="7" class="empty-row">โหลดข้อมูลไม่สำเร็จ — เชื่อมต่อเซิร์ฟเวอร์ไม่ได้</td></tr>';
     }
   }
 
