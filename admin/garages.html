@@ -63,7 +63,8 @@
 
   function render() {
     const q = document.getElementById('searchInput').value.trim().toLowerCase();
-    // เรียงตามคะแนนอยู่แล้วจาก backend — คำนวณอันดับจากลำดับที่ได้มา (ข้อ 1.3.4.7)
+    // ✅ backend เรียงลำดับมาให้แล้ว (อู่ที่แอดมินกำหนดอันดับเอง (rank_order) มาก่อนเสมอ
+    // ตามด้วยอู่ที่เหลือเรียงตามคะแนนรีวิวเฉลี่ย — ข้อ 1.3.4.5) คำนวณเลขลำดับที่แสดงจากตำแหน่งจริง
     const rows = allGarages
       .map((g, i) => ({ ...g, rank: i + 1 }))
       .filter(g => (g.shop_name + g.owner_name).toLowerCase().includes(q));
@@ -98,9 +99,13 @@
       // แต่หน้านี้ไม่เคยมีปุ่มเรียกใช้เลย เพิ่มให้ทุกแถวเรียกใช้งานได้จริง
       actionsHtml += ` <button class="btn-mini btn-blue" onclick="openEditModal(${g.id})">แก้ไข</button>`;
 
+      const rankCell = g.rank_order !== null && g.rank_order !== undefined
+        ? `#${g.rank}<div class="muted" style="font-size:11px;">กำหนดเอง: ${g.rank_order}</div>`
+        : `#${g.rank}`;
+
       return `
         <tr>
-          <td class="mono">#${g.rank}</td>
+          <td class="mono">${rankCell}</td>
           <td>${escapeHtml(g.shop_name || '-')}</td>
           <td class="muted">${escapeHtml(g.owner_name || '-')}</td>
           <td class="muted">${g.job_count} งาน</td>
@@ -169,6 +174,8 @@
             <input id="editPhone" value="${escapeHtml(g.phone || '')}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
           <div><label style="display:block;font-size:12px;color:var(--text-mute);margin-bottom:5px;">ที่อยู่</label>
             <input id="editAddress" value="${escapeHtml(g.address || '')}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
+          <div><label style="display:block;font-size:12px;color:var(--text-mute);margin-bottom:5px;">อันดับ (ไม่บังคับ — เลขน้อยแสดงก่อน ปล่อยว่าง = เรียงตามคะแนนรีวิวอัตโนมัติ)</label>
+            <input id="editRankOrder" type="number" value="${g.rank_order !== null && g.rank_order !== undefined ? g.rank_order : ''}" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--panel-2);color:var(--text-main);"></div>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
           <button class="btn-mini" style="background:var(--panel-2);color:var(--text-mute);" onclick="closeEditModal()">ยกเลิก</button>
@@ -189,9 +196,11 @@
     const ownerName = document.getElementById('editOwnerName').value.trim();
     const phone = document.getElementById('editPhone').value.trim();
     const address = document.getElementById('editAddress').value.trim();
+    const rankOrderRaw = document.getElementById('editRankOrder').value.trim();
+    const rankOrder = rankOrderRaw === '' ? null : Number(rankOrderRaw);
     const res = await fetch(`${API_BASE}/admin/garages/${id}/profile`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shopName, ownerName, phone, address }),
+      body: JSON.stringify({ shopName, ownerName, phone, address, rankOrder }),
     });
     const data = await res.json();
     toast(data.message, data.success);

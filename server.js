@@ -2792,6 +2792,13 @@ app.get('/api/admin/users', (req, res) => {
               WHEN 'admin' THEN 'ผู้ดูแลระบบ'
               ELSE u.email
             END AS display_name,
+            -- ✅ เพิ่มใหม่: เบอร์โทร ใช้พรีฟิลฟอร์ม "แก้ไข" ของแอดมิน (ข้อ 1.3.4.2)
+            CASE u.user_type
+              WHEN 'customer' THEN c.phone
+              WHEN 'repair' THEN g.phone
+              WHEN 'technician' THEN t.phone
+              ELSE NULL
+            END AS phone,
             g.id AS garage_row_id,
             t.status AS technician_status
      FROM users u
@@ -2804,6 +2811,71 @@ app.get('/api/admin/users', (req, res) => {
       res.json({ success: true, message: '', data: { users: results } });
     }
   );
+});
+
+// ✅ เพิ่มใหม่: แก้ไขข้อมูลบัญชีผู้ใช้งานโดยตรงจากฝั่งแอดมิน (ข้อ 1.3.4.2) — เดิมทำได้แค่
+// "ระงับ" กับ "ลบ" เท่านั้น ไม่มีทางแก้ชื่อ/เบอร์/อีเมลที่ผู้ใช้กรอกผิดหรืออยากให้แอดมินแก้แทนเลย
+// แก้ตารางโปรไฟล์ตาม user_type (customers/garages/technicians) + อีเมลในตาราง users ร่วมกัน
+// บัญชี admin ไม่มีตารางโปรไฟล์แยก จึงแก้ได้แค่อีเมลเท่านั้น
+app.put('/api/admin/users/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, email, phone } = req.body;
+  if (!name || !name.trim()) return res.json({ success: false, message: 'กรุณากรอกชื่อ' });
+
+  db.query('SELECT user_type FROM users WHERE id = ?', [id], (err, results) => {
+    if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+    if (results.length === 0) return res.json({ success: false, message: 'ไม่พบผู้ใช้นี้' });
+    const userType = results[0].user_type;
+
+    const updateProfileTable = () => {
+      if (userType === 'customer') {
+        const parts = name.trim().split(' ');
+        const firstName = parts[0] || '';
+        const lastName = parts.slice(1).join(' ') || '';
+        db.query(
+          'UPDATE customers SET first_name = ?, last_name = ?, phone = ? WHERE user_id = ?',
+          [firstName, lastName, phone || null, id],
+          (e) => {
+            if (e) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + e.message });
+            res.json({ success: true, message: 'แก้ไขข้อมูลผู้ใช้แล้ว' });
+          }
+        );
+      } else if (userType === 'repair') {
+        db.query(
+          'UPDATE garages SET shop_name = ?, phone = ? WHERE user_id = ?',
+          [name.trim(), phone || null, id],
+          (e) => {
+            if (e) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + e.message });
+            res.json({ success: true, message: 'แก้ไขข้อมูลผู้ใช้แล้ว' });
+          }
+        );
+      } else if (userType === 'technician') {
+        db.query(
+          'UPDATE technicians SET name = ?, phone = ? WHERE user_id = ?',
+          [name.trim(), phone || null, id],
+          (e) => {
+            if (e) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + e.message });
+            res.json({ success: true, message: 'แก้ไขข้อมูลผู้ใช้แล้ว' });
+          }
+        );
+      } else {
+        // admin หรือประเภทอื่นที่ไม่มีตารางโปรไฟล์แยก -> อีเมลอย่างเดียวก็ถือว่าแก้เสร็จแล้ว
+        res.json({ success: true, message: 'แก้ไขข้อมูลผู้ใช้แล้ว' });
+      }
+    };
+
+    const trimmedEmail = (email || '').trim().toLowerCase();
+    if (!trimmedEmail) return updateProfileTable();
+
+    db.query('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?', [trimmedEmail, id], (dupErr, dupRows) => {
+      if (dupErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + dupErr.message });
+      if (dupRows.length > 0) return res.json({ success: false, message: 'อีเมลนี้ถูกใช้งานโดยบัญชีอื่นแล้ว' });
+      db.query('UPDATE users SET email = ? WHERE id = ?', [trimmedEmail, id], (uErr) => {
+        if (uErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + uErr.message });
+        updateProfileTable();
+      });
+    });
+  });
 });
 
 // เปิด/ระงับการใช้งานบัญชี (ใช้ได้กับทุก user_type)
@@ -2898,13 +2970,17 @@ app.get('/api/admin/garages', (req, res) => {
   db.query(
     `SELECT g.id, g.user_id, g.shop_name, g.owner_name, g.phone, g.address, g.avatar,
             u.email, u.status AS user_status, g.status AS garage_status, u.created_at,
+            g.rank_order,
             COALESCE(AVG(rv.rating), 0) AS avg_rating, COUNT(rv.id) AS review_count,
             (SELECT COUNT(*) FROM repair_requests rr WHERE rr.garage_id = g.user_id) AS job_count
      FROM garages g
      JOIN users u ON u.id = g.user_id
      LEFT JOIN reviews rv ON rv.garage_id = g.user_id
      GROUP BY g.id, u.id
-     ORDER BY avg_rating DESC, g.id DESC`,
+     -- ✅ เพิ่มใหม่ (ข้อ 1.3.4.5): อู่ที่แอดมินกำหนดอันดับเอง (rank_order ไม่ว่าง) มาก่อนเสมอ
+     -- เรียงจากเลขน้อยไปมาก ส่วนอู่ที่ไม่ได้กำหนดอันดับ (rank_order เป็น NULL) ให้ตกไปท้ายกลุ่ม
+     -- แล้วค่อยเรียงตามคะแนนรีวิวเฉลี่ยเหมือนเดิม
+     ORDER BY (g.rank_order IS NULL) ASC, g.rank_order ASC, avg_rating DESC, g.id DESC`,
     (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
       const garages = results.map((g) => ({ ...g, avatar: toImageUrl(g.avatar), avg_rating: Number(g.avg_rating).toFixed(1) }));
@@ -2932,13 +3008,18 @@ app.put('/api/admin/garages/:id/status', (req, res) => {
   });
 });
 
-// แก้ไขข้อมูลโปรไฟล์อู่ (1.3.4.6)
+// แก้ไขข้อมูลโปรไฟล์อู่ (1.3.4.4) + จัดอันดับอู่เอง (ข้อ 1.3.4.5 — ไม่ใช่ 1.3.4.7 ตาม
+// คอมเมนต์เดิม แก้เลขข้อให้ตรงกับขอบเขตโครงงานที่ถูกต้องแล้ว)
 app.put('/api/admin/garages/:id/profile', (req, res) => {
   const { id } = req.params;
-  const { shopName, ownerName, phone, address } = req.body;
+  const { shopName, ownerName, phone, address, rankOrder } = req.body;
+  // ✅ เพิ่มใหม่: rankOrder ว่าง/null -> ไม่กำหนดอันดับเอง (กลับไปเรียงตามคะแนนรีวิวอัตโนมัติ)
+  // ใส่ตัวเลข -> เลขน้อยกว่าแสดงก่อน (ดู ORDER BY ใน GET /api/admin/garages ด้านบน)
+  const parsedRank = parseInt(rankOrder, 10);
+  const normalizedRank = Number.isFinite(parsedRank) ? parsedRank : null;
   db.query(
-    'UPDATE garages SET shop_name = ?, owner_name = ?, phone = ?, address = ? WHERE id = ?',
-    [shopName, ownerName, phone, address, id],
+    'UPDATE garages SET shop_name = ?, owner_name = ?, phone = ?, address = ?, rank_order = ? WHERE id = ?',
+    [shopName, ownerName, phone, address, normalizedRank, id],
     (err, result) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
       if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบอู่นี้' });
@@ -2946,8 +3027,6 @@ app.put('/api/admin/garages/:id/profile', (req, res) => {
     }
   );
 });
-// หมายเหตุ: การจัดอันดับอู่ (1.3.4.7) ใช้ผลจาก avg_rating ที่ query ด้านบนคำนวณให้แล้ว
-// (เรียงจากคะแนนสูงสุด) ไม่ต้องมี endpoint แยก
 
 // ============================================================
 // ===== ADMIN: งานซ่อมทั้งหมด + ปรับสถานะกรณีผิดพลาด (1.3.4.9) =====
