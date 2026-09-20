@@ -416,7 +416,7 @@ app.post('/api/auth/login', (req, res) => {
   db.query(
     `SELECT u.*,
             c.first_name AS cust_first_name, c.last_name AS cust_last_name, c.phone AS cust_phone,
-            c.address AS cust_address, c.car_model AS cust_car_model, c.car_plate AS cust_car_plate,
+            c.address AS cust_address,
             c.avatar AS cust_avatar, c.latitude AS cust_latitude, c.longitude AS cust_longitude,
             g.shop_name AS garage_shop_name, g.owner_name AS garage_owner_name, g.phone AS garage_phone,
             g.address AS garage_address, g.avatar AS garage_avatar, g.hours_weekday AS garage_hours_weekday,
@@ -545,8 +545,6 @@ app.post('/api/auth/login', (req, res) => {
           last_name: user.cust_last_name,
           phone: user.cust_phone,
           address: user.cust_address,
-          car_model: user.cust_car_model,
-          car_plate: user.cust_car_plate,
           avatar: user.cust_avatar,
           latitude: user.cust_latitude,
           longitude: user.cust_longitude,
@@ -604,7 +602,7 @@ app.post('/api/auth/login', (req, res) => {
 // ===== UPDATE PROFILE =====
 app.put('/api/user/update', (req, res) => {
   const {
-    userId, name, phone, address, carModel, carPlate, userType,
+    userId, name, phone, address, userType,
     ownerName, hoursWeekday, hoursWeekend, services,
     latitude, longitude,
   } = req.body;
@@ -619,10 +617,10 @@ app.put('/api/user/update', (req, res) => {
     db.query(
       `UPDATE customers
        SET first_name = ?, last_name = ?, phone = ?, address = ?,
-           car_model = ?, car_plate = ?, latitude = ?, longitude = ?
+           latitude = ?, longitude = ?
        WHERE user_id = ?`,
       [
-        firstName, lastName, phone, address, carModel, carPlate,
+        firstName, lastName, phone, address,
         latitude ?? null, longitude ?? null,
         userId,
       ],
@@ -693,7 +691,7 @@ app.get('/api/user/profile', (req, res) => {
   // หน้าบัญชีรับชำระเงิน (bank_settings_page.dart) จะเห็นช่องว่างเปล่าทั้งที่จริงๆ เคย
   // บันทึกไว้แล้วในฐานข้อมูล ผู้ใช้เลยรู้สึกว่าต้องกรอกใหม่ทุกรอบ
   const cols = userType === 'customer'
-    ? `${alias}.first_name, ${alias}.last_name, ${alias}.phone, ${alias}.address, ${alias}.car_model, ${alias}.car_plate, ${alias}.avatar, ${alias}.latitude, ${alias}.longitude`
+    ? `${alias}.first_name, ${alias}.last_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.latitude, ${alias}.longitude`
     : `${alias}.shop_name, ${alias}.owner_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.hours_weekday, ${alias}.hours_weekend, ${alias}.services, ${alias}.latitude, ${alias}.longitude, ${alias}.bank_name, ${alias}.bank_account_number, ${alias}.bank_account_name, ${alias}.promptpay_id`;
 
   db.query(
