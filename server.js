@@ -1176,7 +1176,7 @@ app.get('/api/repair-requests', (req, res) => {
     sql = `SELECT rr.id, rr.customer_id, rr.garage_id, rr.car_id, rr.vehicle_type, rr.problem_category,
               rr.description, rr.photos, rr.address, rr.latitude, rr.longitude,
               rr.status, rr.rejection_reason, rr.assigned_technician_id, rr.created_at,
-              rr.assignment_date, rr.assignment_note, rr.completed_at,
+              rr.assignment_date, rr.assignment_note, rr.completed_at, rr.customer_confirmed_at,
               c.first_name, c.last_name, c.avatar AS customer_avatar,
               cr.car_model, cr.car_type, cr.car_plate, cr.car_brand, cr.car_color, cr.car_year,
               t.name AS technician_name, t.phone AS technician_phone,
@@ -1199,7 +1199,7 @@ app.get('/api/repair-requests', (req, res) => {
     sql = `SELECT rr.id, rr.customer_id, rr.garage_id, rr.car_id, rr.vehicle_type, rr.problem_category,
               rr.description, rr.photos, rr.address, rr.latitude, rr.longitude,
               rr.status, rr.rejection_reason, rr.assigned_technician_id, rr.created_at,
-              rr.assignment_date, rr.assignment_note, rr.completed_at,
+              rr.assignment_date, rr.assignment_note, rr.completed_at, rr.customer_confirmed_at,
               g.shop_name, g.avatar AS garage_avatar, g.phone AS garage_phone, g.address AS garage_address,
               g.bank_name, g.bank_account_number, g.bank_account_name, g.promptpay_id,
               cr.car_model, cr.car_type, cr.car_plate, cr.car_brand, cr.car_color, cr.car_year,
@@ -1624,6 +1624,53 @@ app.put('/api/repair-requests/:id/technician-status', (req, res) => {
   });
 });
 
+// ===== ลูกค้ายืนยันการรับบริการเมื่อซ่อมเสร็จ (ข้อ 1.3.1.15) =====
+// ✅ เพิ่มใหม่: เดิมพอสถานะเป็น 'completed' ลูกค้าจ่ายเงินได้ทันทีเลย ไม่มีขั้นตอนที่ลูกค้า
+// ต้องกดยืนยันว่าตรวจรถแล้วจริงๆ ก่อน — เพิ่ม endpoint นี้คั่นกลางระหว่าง "ซ่อมเสร็จ" กับ
+// "จ่ายเงิน" ตามลำดับที่ขอบเขตกำหนด (ซ่อมเสร็จ -> ลูกค้ายืนยันรับบริการ -> จ่ายเงิน -> รีวิว)
+// POST /api/payments เช็คคอลัมน์นี้แล้วด้วยว่าต้องยืนยันก่อนถึงจะจ่ายได้
+app.put('/api/repair-requests/:id/confirm-receipt', (req, res) => {
+  const { id } = req.params;
+  const { customerId } = req.body;
+  if (!customerId) {
+    return res.json({ success: false, message: 'ไม่พบ customerId' });
+  }
+
+  db.query(
+    `SELECT rr.customer_id, rr.status, rr.customer_confirmed_at, rr.garage_id, g.shop_name
+     FROM repair_requests rr
+     JOIN garages g ON g.user_id = rr.garage_id
+     WHERE rr.id = ?`,
+    [id],
+    (err, rows) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+      if (rows.length === 0) return res.json({ success: false, message: 'ไม่พบคำขอซ่อมนี้' });
+
+      const request = rows[0];
+      if (String(request.customer_id) !== String(customerId)) {
+        return res.json({ success: false, message: 'ไม่มีสิทธิ์ยืนยันคำขอนี้' });
+      }
+      if (request.status !== 'completed') {
+        return res.json({ success: false, message: 'ยืนยันการรับบริการได้เมื่องานซ่อมเสร็จเรียบร้อยแล้วเท่านั้น' });
+      }
+      if (request.customer_confirmed_at) {
+        return res.json({ success: false, message: 'ยืนยันการรับบริการไปแล้ว' });
+      }
+
+      db.query('UPDATE repair_requests SET customer_confirmed_at = NOW() WHERE id = ?', [id], (err2) => {
+        if (err2) return res.json({ success: false, message: 'อัปเดตไม่สำเร็จ: ' + err2.message });
+        res.json({ success: true, message: 'ยืนยันการรับบริการสำเร็จ' });
+
+        sendPushNotification(
+          request.garage_id, 'repair', 'ลูกค้ายืนยันรับบริการแล้ว ✅',
+          `งาน #REQ${id.toString().padStart(6, '0')} — ลูกค้ายืนยันว่าได้รับบริการเรียบร้อยแล้ว`,
+          { type: 'customer_confirmed', requestId: id }
+        );
+      });
+    }
+  );
+});
+
 // ===== ช่างบันทึกความคืบหน้างานซ่อม (โน้ต + อะไหล่ที่ใช้ + รูป) =====
 app.post('/api/repair-logs', (req, res) => {
   uploadRepairPhotos(req, res, async (err) => {
@@ -2013,8 +2060,9 @@ app.post('/api/payments', (req, res) => {
       return res.json({ success: false, message: 'อัปโหลดสลิปไม่สำเร็จ: ' + uploadFileErr.message });
     }
 
-    // ✅ ต้องเป็นคำขอซ่อมของลูกค้าคนนี้จริง และซ่อมเสร็จแล้วเท่านั้นถึงจะจ่ายได้
-    db.query('SELECT customer_id, status FROM repair_requests WHERE id = ?', [repairRequestId], (err, rows) => {
+    // ✅ ต้องเป็นคำขอซ่อมของลูกค้าคนนี้จริง ซ่อมเสร็จแล้ว และลูกค้ายืนยันรับบริการแล้ว
+    // (ข้อ 1.3.1.15) เท่านั้นถึงจะจ่ายได้ — ลำดับคือ ซ่อมเสร็จ -> ลูกค้ายืนยันรับบริการ -> จ่ายเงิน -> รีวิว
+    db.query('SELECT customer_id, status, customer_confirmed_at FROM repair_requests WHERE id = ?', [repairRequestId], (err, rows) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
       if (rows.length === 0) return res.json({ success: false, message: 'ไม่พบคำขอซ่อมนี้' });
 
@@ -2024,6 +2072,9 @@ app.post('/api/payments', (req, res) => {
       }
       if (request.status !== 'completed') {
         return res.json({ success: false, message: 'ชำระเงินได้เมื่องานซ่อมเสร็จเรียบร้อยแล้วเท่านั้น' });
+      }
+      if (!request.customer_confirmed_at) {
+        return res.json({ success: false, message: 'กรุณายืนยันการรับบริการก่อนชำระเงิน' });
       }
 
       db.query('SELECT id, status FROM payments WHERE repair_request_id = ?', [repairRequestId], (err2, existing) => {
