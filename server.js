@@ -3113,19 +3113,54 @@ app.put('/api/admin/repairs/:id/status', (req, res) => {
   });
 });
 
-app.delete('/api/admin/repairs/:id', (req, res) => {
+// ✅ แอดมินลบงานซ่อมได้แม้มีใบเสนอราคา/การชำระเงิน/รีวิว/ค่าคอมมิชชั่นผูกอยู่แล้ว (เดิมชน
+// FK ตรงๆ ลบไม่ได้เลยถ้ามีข้อมูลลูกผูกอยู่ — ตามที่แจ้งว่าอยากให้แอดมินลบได้จริง) ลบข้อมูลลูก
+// ทั้งหมดที่ผูกกับงานซ่อมนี้ก่อน (เรียงลำดับกัน FK ชนกันเอง) แล้วค่อยลบงานซ่อมตัวเอง ทำเป็น
+// transaction เดียวกันทั้งหมด พลาดขั้นไหน rollback หมดไม่ให้ข้อมูลค้างครึ่งๆ กลางๆ
+app.delete('/api/admin/repairs/:id', async (req, res) => {
   const { id } = req.params;
-  db.query('DELETE FROM repair_requests WHERE id = ?', [id], (err, result) => {
-    if (err) {
-      // '23503' = Postgres foreign_key_violation (เทียบเท่า ER_ROW_IS_REFERENCED ของ MySQL)
-      if (err.code === '23503') {
-        return res.json({ success: false, message: 'ลบไม่ได้ เพราะมีใบเสนอราคา/การชำระเงินผูกอยู่' });
-      }
-      return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+  const conn = await dbPool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // ถ้างานนี้เคยโดนหักค่าคอมมิชชั่นไปแล้ว (ลูกค้าจ่ายเงินแล้ว อู่โดนหักคอมจาก wallet ไปแล้ว)
+    // ต้องคืนยอดเข้า wallet ของอู่ก่อนลบประวัติทิ้ง ไม่งั้นยอด wallet จะค้างติดลบแบบไม่มีที่มา
+    // ที่ไปให้ตรวจสอบย้อนหลังได้อีก
+    const [commissions] = await conn.query(
+      'SELECT garage_id, commission_amount FROM commission_transactions WHERE repair_request_id = ?',
+      [id]
+    );
+    for (const c of commissions) {
+      await conn.query('UPDATE garages SET wallet_balance = wallet_balance + ? WHERE user_id = ?', [
+        c.commission_amount,
+        c.garage_id,
+      ]);
     }
-    if (result.affectedRows === 0) return res.json({ success: false, message: 'ไม่พบงานซ่อมนี้' });
-    res.json({ success: true, message: 'ลบงานซ่อมแล้ว' });
-  });
+    await conn.query('DELETE FROM commission_transactions WHERE repair_request_id = ?', [id]);
+
+    await conn.query('DELETE FROM reviews WHERE repair_request_id = ?', [id]);
+    await conn.query('DELETE FROM payments WHERE repair_request_id = ?', [id]);
+    await conn.query('DELETE FROM quotations WHERE repair_request_id = ?', [id]);
+    await conn.query('DELETE FROM repair_logs WHERE repair_request_id = ?', [id]);
+
+    const [result] = await conn.query('DELETE FROM repair_requests WHERE id = ?', [id]);
+
+    if (result.affectedRows === 0) {
+      await conn.rollback();
+      return res.json({ success: false, message: 'ไม่พบงานซ่อมนี้' });
+    }
+
+    await conn.commit();
+    res.json({
+      success: true,
+      message: 'ลบงานซ่อมแล้ว พร้อมใบเสนอราคา/การชำระเงิน/รีวิวที่เกี่ยวข้องทั้งหมด (คืนยอดค่าคอมมิชชั่นเข้า wallet อู่แล้วถ้ามี)',
+    });
+  } catch (err) {
+    await conn.rollback();
+    res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+  } finally {
+    conn.release();
+  }
 });
 
 // ============================================================

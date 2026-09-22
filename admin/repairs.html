@@ -128,7 +128,7 @@
   }
 
   async function removeRepair(id) {
-    if (!confirm('ยืนยันลบงานซ่อมนี้? การกระทำนี้ย้อนกลับไม่ได้')) return;
+    if (!confirm('ยืนยันลบงานซ่อมนี้? จะลบใบเสนอราคา/การชำระเงิน/รีวิวที่เกี่ยวข้องทั้งหมดไปด้วย การกระทำนี้ย้อนกลับไม่ได้')) return;
     const res = await fetch(`${API_BASE}/admin/repairs/${id}`, { method: 'DELETE' });
     const data = await res.json();
     toast(data.message, data.success);
