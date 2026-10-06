@@ -2351,8 +2351,10 @@ app.post('/api/repair-requests/mark-seen', (req, res) => {
 // ===== CREATE QUOTATION (อู่สร้างใบเสนอราคาให้คำขอซ่อมที่รับไว้แล้ว) =====
 app.post('/api/quotations', (req, res) => {
   const {
-    repairRequestId, items, laborCost, totalPrice: totalPriceFromClient, estimatedStartDate, estimatedEndDate, notes,
+    repairRequestId, items, laborCost, laborItems, totalPrice: totalPriceFromClient, estimatedStartDate, estimatedEndDate, notes,
   } = req.body;
+  // รายการค่าแรงแบบแยกบรรทัด (ชื่อ/เวลา/หน่วย/ราคา) เก็บเป็น JSON ไว้ให้หน้าแก้ไขดึงกลับมาได้ครบ
+  const laborItemsJson = JSON.stringify(Array.isArray(laborItems) ? laborItems : []);
 
   if (!repairRequestId || laborCost === undefined) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
@@ -2388,12 +2390,13 @@ app.post('/api/quotations', (req, res) => {
   function insertQuotation() {
   db.query(
     `INSERT INTO quotations
-      (repair_request_id, items, labor_cost, parts_cost, total_price, estimated_start_date, estimated_end_date, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      (repair_request_id, items, labor_cost, labor_items, parts_cost, total_price, estimated_start_date, estimated_end_date, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     [
       repairRequestId,
       JSON.stringify(itemList),
       laborCost,
+      laborItemsJson,
       partsCost,
       totalPrice,
       estimatedStartDate || null,
@@ -2442,11 +2445,12 @@ app.post('/api/quotations', (req, res) => {
 // endpoint นี้ไว้ตั้งแต่ก่อนหน้านี้แล้ว แต่ backend ยังไม่เคยมี route รองรับเลย
 app.put('/api/quotations/:id', (req, res) => {
   const { id } = req.params;
-  const { items, laborCost, totalPrice: totalPriceFromClient, estimatedStartDate, estimatedEndDate, notes } = req.body;
+  const { items, laborCost, laborItems, totalPrice: totalPriceFromClient, estimatedStartDate, estimatedEndDate, notes } = req.body;
 
   if (laborCost === undefined) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
+  const laborItemsJson = JSON.stringify(Array.isArray(laborItems) ? laborItems : []);
 
   const itemList = Array.isArray(items) ? items : [];
   const partsCost = itemList.reduce(
@@ -2459,12 +2463,13 @@ app.put('/api/quotations/:id', (req, res) => {
 
   db.query(
     `UPDATE quotations
-     SET items = ?, labor_cost = ?, parts_cost = ?, total_price = ?,
+     SET items = ?, labor_cost = ?, labor_items = ?, parts_cost = ?, total_price = ?,
          estimated_start_date = ?, estimated_end_date = ?, notes = ?
      WHERE id = ?`,
     [
       JSON.stringify(itemList),
       laborCost,
+      laborItemsJson,
       partsCost,
       totalPrice,
       estimatedStartDate || null,
@@ -2523,7 +2528,13 @@ app.get('/api/quotations', (req, res) => {
       } catch (e) {
         items = [];
       }
-      res.json({ success: true, message: '', data: { quotation: { ...q, items } } });
+      let laborItems = [];
+      try {
+        laborItems = typeof q.labor_items === 'string' ? JSON.parse(q.labor_items) : (q.labor_items || []);
+      } catch (e) {
+        laborItems = [];
+      }
+      res.json({ success: true, message: '', data: { quotation: { ...q, items, labor_items: laborItems } } });
     }
   );
 });
