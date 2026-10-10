@@ -2348,13 +2348,58 @@ app.post('/api/repair-requests/mark-seen', (req, res) => {
   );
 });
 
+// ===== ตัวช่วยบันทึกรายการอะไหล่/ค่าแรงของใบเสนอราคา (ตารางลูก quotation_items / quotation_labor_items) =====
+// ✅ Normalize: เดิมเก็บเป็น JSON ในคอลัมน์ quotations.items / labor_items (หนึ่งช่องหลายค่า)
+// ตอนนี้แยกเป็นแถวละ 1 รายการ — ใบเสนอราคา 1 ใบมีได้หลายรายการ (1 : N)
+// API ที่คุยกับ Flutter ยังรับ/ส่ง items และ laborItems เป็น array เหมือนเดิมทุกอย่าง
+function insertQuotationLines(table, quotationId, cols, rows, cb) {
+  if (rows.length === 0) return cb(null);
+  const placeholders = rows.map(() => '(?, ' + cols.map(() => '?').join(', ') + ')').join(', ');
+  const params = [];
+  rows.forEach((r) => params.push(quotationId, ...r));
+  db.query(
+    `INSERT INTO ${table} (quotation_id, ${cols.join(', ')}) VALUES ${placeholders}`,
+    params,
+    (err) => cb(err || null)
+  );
+}
+
+function replaceQuotationLines(quotationId, itemList, laborList, done) {
+  const itemRows = itemList.map((it) => [
+    String((it && it.name) || '-').slice(0, 255),
+    Number(it && it.quantity) || 1,
+    (it && it.unit) ? String(it.unit).slice(0, 30) : null,
+    Number(it && it.price) || 0,
+  ]);
+  const laborRows = laborList.map((l) => {
+    const t = Number(l && (l.time !== undefined ? l.time : l.duration));
+    return [
+      String((l && l.name) || '-').slice(0, 255),
+      Number.isFinite(t) ? t : 1,
+      (l && l.unit) ? String(l.unit).slice(0, 30) : null,
+      Number(l && l.price) || 0,
+    ];
+  });
+
+  db.query('DELETE FROM quotation_items WHERE quotation_id = ?', [quotationId], (e1) => {
+    if (e1) return done(e1);
+    db.query('DELETE FROM quotation_labor_items WHERE quotation_id = ?', [quotationId], (e2) => {
+      if (e2) return done(e2);
+      insertQuotationLines('quotation_items', quotationId, ['name', 'quantity', 'unit', 'price'], itemRows, (e3) => {
+        if (e3) return done(e3);
+        insertQuotationLines('quotation_labor_items', quotationId, ['name', 'duration', 'unit', 'price'], laborRows, done);
+      });
+    });
+  });
+}
+
 // ===== CREATE QUOTATION (อู่สร้างใบเสนอราคาให้คำขอซ่อมที่รับไว้แล้ว) =====
 app.post('/api/quotations', (req, res) => {
   const {
     repairRequestId, items, laborCost, laborItems, totalPrice: totalPriceFromClient, estimatedStartDate, estimatedEndDate, notes,
   } = req.body;
-  // รายการค่าแรงแบบแยกบรรทัด (ชื่อ/เวลา/หน่วย/ราคา) เก็บเป็น JSON ไว้ให้หน้าแก้ไขดึงกลับมาได้ครบ
-  const laborItemsJson = JSON.stringify(Array.isArray(laborItems) ? laborItems : []);
+  // รายการค่าแรงแบบแยกบรรทัด (ชื่อ/เวลา/หน่วย/ราคา) เก็บเป็นแถวในตาราง quotation_labor_items
+  const laborList = Array.isArray(laborItems) ? laborItems : [];
 
   if (!repairRequestId || laborCost === undefined) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
@@ -2390,13 +2435,11 @@ app.post('/api/quotations', (req, res) => {
   function insertQuotation() {
   db.query(
     `INSERT INTO quotations
-      (repair_request_id, items, labor_cost, labor_items, parts_cost, total_price, estimated_start_date, estimated_end_date, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      (repair_request_id, labor_cost, parts_cost, total_price, estimated_start_date, estimated_end_date, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     [
       repairRequestId,
-      JSON.stringify(itemList),
       laborCost,
-      laborItemsJson,
       partsCost,
       totalPrice,
       estimatedStartDate || null,
@@ -2405,6 +2448,14 @@ app.post('/api/quotations', (req, res) => {
     ],
     (err, result) => {
       if (err) return res.json({ success: false, message: 'สร้างใบเสนอราคาไม่สำเร็จ: ' + err.message });
+
+      const newQuotationId = result.insertId;
+      replaceQuotationLines(newQuotationId, itemList, laborList, (lineErr) => {
+      if (lineErr) {
+        // บันทึกรายการลูกไม่สำเร็จ -> ลบใบที่เพิ่งสร้างทิ้ง กันเหลือใบเสนอราคาที่ไม่มีรายการ
+        db.query('DELETE FROM quotations WHERE id = ?', [newQuotationId], () => {});
+        return res.json({ success: false, message: 'บันทึกรายการในใบเสนอราคาไม่สำเร็จ: ' + lineErr.message });
+      }
 
       // ✅ อัปเดตสถานะคำขอซ่อมเป็น "quoted" (ส่งใบเสนอราคาแล้ว รอลูกค้ายืนยัน)
       // ✅ เพิ่ม customer_seen = 0 พร้อมกัน — เดิมจุดนี้ไม่รีเซ็ตเลย ถ้าลูกค้าเคยเปิดดู
@@ -2435,6 +2486,7 @@ app.post('/api/quotations', (req, res) => {
           );
         }
       );
+      });
     }
   );
   }
@@ -2450,7 +2502,7 @@ app.put('/api/quotations/:id', (req, res) => {
   if (laborCost === undefined) {
     return res.json({ success: false, message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
-  const laborItemsJson = JSON.stringify(Array.isArray(laborItems) ? laborItems : []);
+  const laborList = Array.isArray(laborItems) ? laborItems : [];
 
   const itemList = Array.isArray(items) ? items : [];
   const partsCost = itemList.reduce(
@@ -2463,13 +2515,11 @@ app.put('/api/quotations/:id', (req, res) => {
 
   db.query(
     `UPDATE quotations
-     SET items = ?, labor_cost = ?, labor_items = ?, parts_cost = ?, total_price = ?,
+     SET labor_cost = ?, parts_cost = ?, total_price = ?,
          estimated_start_date = ?, estimated_end_date = ?, notes = ?
      WHERE id = ?`,
     [
-      JSON.stringify(itemList),
       laborCost,
-      laborItemsJson,
       partsCost,
       totalPrice,
       estimatedStartDate || null,
@@ -2482,6 +2532,8 @@ app.put('/api/quotations/:id', (req, res) => {
       if (result.affectedRows === 0) {
         return res.json({ success: false, message: 'ไม่พบใบเสนอราคานี้' });
       }
+      replaceQuotationLines(id, itemList, laborList, (lineErr) => {
+      if (lineErr) return res.json({ success: false, message: 'บันทึกรายการในใบเสนอราคาไม่สำเร็จ: ' + lineErr.message });
       res.json({ success: true, message: 'แก้ไขใบเสนอราคาสำเร็จ' });
 
       // ✅ ใหม่ — เดิมแจ้งเตือนลูกค้าแค่ตอนสร้างใบเสนอราคาครั้งแรก (POST) แต่ตอนอู่แก้ไข
@@ -2505,6 +2557,7 @@ app.put('/api/quotations/:id', (req, res) => {
           );
         }
       );
+      });
     }
   );
 });
@@ -2522,19 +2575,37 @@ app.get('/api/quotations', (req, res) => {
       if (results.length === 0) return res.json({ success: true, message: '', data: { quotation: null } });
 
       const q = results[0];
-      let items = [];
-      try {
-        items = q.items ? JSON.parse(q.items) : [];
-      } catch (e) {
-        items = [];
-      }
-      let laborItems = [];
-      try {
-        laborItems = typeof q.labor_items === 'string' ? JSON.parse(q.labor_items) : (q.labor_items || []);
-      } catch (e) {
-        laborItems = [];
-      }
-      res.json({ success: true, message: '', data: { quotation: { ...q, items, labor_items: laborItems } } });
+      db.query(
+        'SELECT name, quantity, unit, price FROM quotation_items WHERE quotation_id = ? ORDER BY id',
+        [q.id],
+        (itemErr, itemRows) => {
+          if (itemErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + itemErr.message });
+          db.query(
+            'SELECT name, duration, unit, price FROM quotation_labor_items WHERE quotation_id = ? ORDER BY id',
+            [q.id],
+            (laborErr, laborRows) => {
+              if (laborErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + laborErr.message });
+
+              // ส่งกลับรูปแบบเดิมให้ Flutter (items / labor_items เป็น array) — ไม่ใส่ key unit ถ้าไม่มีค่า
+              const items = itemRows.map((r) => ({
+                name: r.name, quantity: r.quantity, price: r.price, ...(r.unit ? { unit: r.unit } : {}),
+              }));
+              let laborItems = laborRows.map((r) => ({
+                name: r.name, time: r.duration, price: r.price, ...(r.unit ? { unit: r.unit } : {}),
+              }));
+              // ใบเก่าที่ยังไม่ได้ย้ายค่าแรงเข้าตารางใหม่ — fallback ไปอ่านคอลัมน์ JSON เดิม (ถ้ายังมีอยู่)
+              if (laborItems.length === 0 && q.labor_items) {
+                try {
+                  const legacy = typeof q.labor_items === 'string' ? JSON.parse(q.labor_items) : q.labor_items;
+                  if (Array.isArray(legacy)) laborItems = legacy;
+                } catch (e) { /* ข้อมูลเก่าเสีย ใช้ array ว่าง */ }
+              }
+              const { items: _legacyItems, labor_items: _legacyLabor, ...quotationRow } = q;
+              res.json({ success: true, message: '', data: { quotation: { ...quotationRow, items, labor_items: laborItems } } });
+            }
+          );
+        }
+      );
     }
   );
 });
