@@ -1681,6 +1681,17 @@ app.post('/api/repair-logs', (req, res) => {
       return res.json({ success: false, message: 'ข้อมูลไม่ครบ' });
     }
 
+    // ✅ photoTypes = JSON array เรียงตามไฟล์ที่แนบมา เช่น ["before","after"] หรือ ["part"]
+    // (before = ก่อนซ่อม, after = หลังซ่อม, part = รูปอะไหล่ที่ใช้) — ไฟล์ไหนไม่ระบุ/ไม่ถูกต้อง ข้ามไป
+    let photoTypes = [];
+    try {
+      photoTypes = JSON.parse(req.body.photoTypes || '[]');
+      if (!Array.isArray(photoTypes)) photoTypes = [];
+    } catch (e) {
+      photoTypes = [];
+    }
+    const VALID_TYPES = ['before', 'after', 'part'];
+
     let photoFilenames = [];
     try {
       photoFilenames = await Promise.all((req.files || []).map((f) => uploadToSupabase(f, 'photo')));
@@ -1691,9 +1702,35 @@ app.post('/api/repair-logs', (req, res) => {
     db.query(
       `INSERT INTO repair_logs (repair_request_id, technician_id, note, parts_used, photos)
        VALUES (?, ?, ?, ?, ?) RETURNING id`,
-      [repairRequestId, technicianId, note || '', partsUsed || '', JSON.stringify(photoFilenames)],
-      (err2) => {
+      [repairRequestId, technicianId, note || '', partsUsed || '', '[]'],
+      (err2, insertResult) => {
         if (err2) return res.json({ success: false, message: 'บันทึกไม่สำเร็จ: ' + err2.message });
+        const logId = insertResult.insertId;
+
+        const photoRows = [];
+        photoFilenames.forEach((fname, i) => {
+          const t = VALID_TYPES.includes(photoTypes[i]) ? photoTypes[i] : null;
+          if (t) photoRows.push([t, fname]);
+        });
+
+        const afterPhotos = (photoErr) => {
+          if (photoErr) {
+            db.query('DELETE FROM repair_logs WHERE id = ?', [logId], () => {});
+            return res.json({ success: false, message: 'บันทึกรูปไม่สำเร็จ: ' + photoErr.message });
+          }
+          finishLog();
+        };
+        if (photoRows.length === 0) return afterPhotos(null);
+        const ph = photoRows.map(() => '(?, ?, ?)').join(', ');
+        const params = [];
+        photoRows.forEach((r) => params.push(logId, r[0], r[1]));
+        db.query(
+          `INSERT INTO repair_log_photos (repair_log_id, photo_type, photo_url) VALUES ${ph}`,
+          params,
+          (e3) => afterPhotos(e3 || null)
+        );
+
+        function finishLog() {
         res.json({ success: true, message: 'บันทึกความคืบหน้าสำเร็จ' });
 
         // ✅ ใหม่ — เดิม endpoint นี้ไม่ส่งการแจ้งเตือนเลยแม้แต่รายการเดียว ทำให้ลูกค้า/อู่
@@ -1724,6 +1761,7 @@ app.post('/api/repair-logs', (req, res) => {
             );
           }
         );
+        } // end finishLog
       }
     );
   });
@@ -1743,16 +1781,39 @@ app.get('/api/repair-logs', (req, res) => {
     [repairRequestId],
     (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
-      const logs = results.map((l) => {
-        let photos = [];
-        try {
-          photos = l.photos ? JSON.parse(l.photos) : [];
-        } catch (e) {
-          photos = [];
+      if (results.length === 0) return res.json({ success: true, message: '', data: { logs: [] } });
+
+      // ✅ รูปของแต่ละ log อยู่ในตาราง repair_log_photos (แยกประเภท before/after/part)
+      const logIds = results.map((l) => l.id);
+      db.query(
+        `SELECT repair_log_id, photo_type, photo_url FROM repair_log_photos
+         WHERE repair_log_id IN (?) ORDER BY id ASC`,
+        [logIds],
+        (err2, photoRows) => {
+          if (err2) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err2.message });
+          const byLog = {};
+          photoRows.forEach((p) => {
+            (byLog[p.repair_log_id] = byLog[p.repair_log_id] || []).push({
+              type: p.photo_type,
+              url: toImageUrl(p.photo_url),
+            });
+          });
+          const logs = results.map((l) => {
+            let photoItems = byLog[l.id] || [];
+            if (photoItems.length === 0 && l.photos) {
+              // log เก่าก่อนมีตาราง repair_log_photos: รูปอยู่ใน JSON เดิม (ไม่ทราบประเภท)
+              try {
+                photoItems = JSON.parse(l.photos).map((p) => ({ type: 'other', url: toImageUrl(p) }));
+              } catch (e) {
+                photoItems = [];
+              }
+            }
+            const { photos: _legacy, ...rest } = l;
+            return { ...rest, photos: photoItems.map((p) => p.url), photo_items: photoItems };
+          });
+          res.json({ success: true, message: '', data: { logs } });
         }
-        return { ...l, photos: photos.map((p) => toImageUrl(p)) };
-      });
-      res.json({ success: true, message: '', data: { logs } });
+      );
     }
   );
 });
