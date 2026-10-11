@@ -3543,6 +3543,30 @@ app.put('/api/admin/platform/bank-account', (req, res) => {
   );
 });
 
+// ===== [แอดมิน] จำนวนรายการที่รอแอดมินดำเนินการ — ใช้โชว์ตัวเลขบน sidebar/กระดิ่ง =====
+// อู่รออนุมัติ / คำขอชำระค่าคอมมิชชั่นรอยืนยัน / ข้อร้องเรียนที่ยังไม่แก้ไข
+app.get('/api/admin/pending-counts', (req, res) => {
+  db.query(
+    `SELECT
+      (SELECT COUNT(*) FROM garages WHERE status = 'pending') AS "pendingGarages",
+      (SELECT COUNT(*) FROM wallet_topups WHERE status = 'pending_confirmation') AS "pendingTopups",
+      (SELECT COUNT(*) FROM complaints WHERE status <> 'resolved') AS "openComplaints"`,
+    (err, results) => {
+      if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
+      const r = results[0] || {};
+      res.json({
+        success: true,
+        message: '',
+        data: {
+          pendingGarages: Number(r.pendingGarages) || 0,
+          pendingTopups: Number(r.pendingTopups) || 0,
+          openComplaints: Number(r.openComplaints) || 0,
+        },
+      });
+    }
+  );
+});
+
 app.get('/api/admin/dashboard-stats', (req, res) => {
   db.query(
     // ✅ แปลงจาก MySQL: DATE_SUB(CURDATE(), INTERVAL 1 MONTH) -> CURRENT_DATE - INTERVAL '1 month',

@@ -98,6 +98,7 @@ function mountSidebar(activeKey) {
         <a class="menu-item ${item.key === activeKey ? 'active' : ''}" href="${item.href}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${item.icon}</svg>
           ${item.label}
+          <span class="menu-badge" data-badge="${item.key}" hidden></span>
         </a>`).join('')}
     </div>`).join('');
 
@@ -132,6 +133,7 @@ function mountSidebar(activeKey) {
   if (window.innerWidth > MOBILE_MENU_BREAKPOINT && localStorage.getItem('adminSidebarCollapsed') === '1') {
     mount.classList.add('collapsed');
   }
+  loadAdminBadges();
 }
 
 // ✅ แถบบนสุด (Admin Management System + ค้นหา/แจ้งเตือน/avatar) ตรงกับต้นแบบ Figma
@@ -156,7 +158,7 @@ function mountAppbar(mountId = 'appbarMount') {
       <div class="notif-wrap" style="position:relative;">
         <button class="icon-btn" title="การแจ้งเตือน" onclick="toggleNotifPanel(event)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          <span class="dot"></span>
+          <span class="dot" id="bellCount" hidden></span>
         </button>
         <div id="notifPanel" style="display:none;position:absolute;top:44px;right:0;width:300px;max-height:360px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 40px -12px rgba(0,0,0,0.3);z-index:50;"></div>
       </div>
@@ -166,6 +168,45 @@ function mountAppbar(mountId = 'appbarMount') {
       </div>
     </div>
   `;
+  applyAdminBadges();
+}
+
+// ✅ ตัวเลขจำนวนรายการที่รอแอดมินดำเนินการ (เฉพาะตัวเลข ไม่กะพริบ) — แสดงที่เมนูข้าง
+// "อู่ซ่อมรถ & อนุมัติ" (อู่รออนุมัติ), "รีวิว & ข้อร้องเรียน" (ข้อร้องเรียนที่ยังไม่แก้ไข),
+// "Wallet & ค่าคอมมิชชั่น" (คำขอชำระค่าคอมรอยืนยัน) และรวมยอดที่กระดิ่งด้านบน
+// ข้อมูลมาจาก GET /api/admin/pending-counts
+let __adminCounts = null;
+function applyAdminBadges() {
+  if (!__adminCounts) return;
+  const byKey = {
+    garages: __adminCounts.pendingGarages,
+    commissions: __adminCounts.pendingTopups,
+    reviews: __adminCounts.openComplaints,
+  };
+  document.querySelectorAll('.menu-badge').forEach((el) => {
+    const n = Number(byKey[el.dataset.badge]) || 0;
+    el.textContent = n > 99 ? '99+' : String(n);
+    el.hidden = n <= 0;
+  });
+  const total = Object.values(byKey).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  const bell = document.getElementById('bellCount');
+  if (bell) {
+    bell.textContent = total > 99 ? '99+' : String(total);
+    bell.hidden = total <= 0;
+  }
+}
+
+async function loadAdminBadges() {
+  try {
+    const res = await fetch(window.location.origin + '/api/admin/pending-counts');
+    const data = await res.json();
+    if (data.success && data.data) {
+      __adminCounts = data.data;
+      applyAdminBadges();
+    }
+  } catch (err) {
+    // เงียบไว้ — ตัวเลขเป็นแค่ตัวช่วย ถ้าโหลดไม่ได้ก็ไม่โชว์เฉยๆ
+  }
 }
 
 // ✅ แจ้งเตือน — เดิมปุ่มนี้ไม่มี onclick เลย กดแล้วไม่มีอะไรเกิดขึ้น (ปุ่มตายจริงๆ)
