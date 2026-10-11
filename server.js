@@ -2513,6 +2513,24 @@ app.put('/api/quotations/:id', (req, res) => {
     ? Number(totalPriceFromClient)
     : partsCost + Number(laborCost);
 
+  // ✅ ล็อกการแก้ไข: ลูกค้ากดยอมรับใบเสนอราคาแล้ว (หรืองานเลยขั้น "รอลูกค้าตอบ" ไปแล้ว)
+  // ห้ามแก้ — ราคาที่ตกลงกันแล้วต้องไม่เปลี่ยนกลางทาง (เช็คที่ backend ด้วย ไม่พึ่งแค่การซ่อนปุ่มฝั่งแอป)
+  db.query(
+    `SELECT q.status AS quotation_status, rr.status AS request_status
+     FROM quotations q
+     JOIN repair_requests rr ON rr.id = q.repair_request_id
+     WHERE q.id = ?`,
+    [id],
+    (guardErr, guardRows) => {
+  if (guardErr) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + guardErr.message });
+  if (guardRows.length === 0) return res.json({ success: false, message: 'ไม่พบใบเสนอราคานี้' });
+  if (guardRows[0].quotation_status === 'confirmed' || guardRows[0].request_status !== 'quoted') {
+    return res.json({
+      success: false,
+      message: 'ลูกค้ายืนยันใบเสนอราคานี้แล้ว หรืองานเริ่มดำเนินการแล้ว ไม่สามารถแก้ไขใบเสนอราคาได้',
+    });
+  }
+
   db.query(
     `UPDATE quotations
      SET labor_cost = ?, parts_cost = ?, total_price = ?,
@@ -2559,6 +2577,7 @@ app.put('/api/quotations/:id', (req, res) => {
       );
       });
     }
+  );    }
   );
 });
 
