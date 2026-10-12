@@ -327,6 +327,78 @@ dbPool
   .then(() => console.log('✅ ตาราง complaints พร้อมใช้งาน'))
   .catch((err) => console.error('❌ สร้างตาราง complaints ไม่สำเร็จ:', err.message));
 
+
+// ===== บริการของอู่ (ตาราง garage_services) =====
+// เดิมเก็บเป็นข้อความ JSON ในคอลัมน์ garages.services (หนึ่งช่องมีหลายบริการ ผิด 1NF) ตอนนี้แยกเป็น
+// ตารางลูก garage_services (1 บริการ = 1 แถว, garages 1 : N garage_services) แต่รูปแบบข้อมูลที่ส่งให้แอป
+// ยังเหมือนเดิมทุกอย่าง: services เป็น array ของ {category, name, priceMin, priceMax, details, active}
+function fetchGarageServices(garageIds) {
+  return new Promise((resolve) => {
+    const ids = (garageIds || []).filter((x) => x !== null && x !== undefined);
+    if (ids.length === 0) return resolve({});
+    db.query(
+      `SELECT garage_id, category, name, price_min, price_max, details, active
+       FROM garage_services WHERE garage_id IN (?) ORDER BY sort_order ASC, id ASC`,
+      [ids],
+      (err, rows) => {
+        if (err) {
+          console.error('❌ โหลด garage_services ไม่สำเร็จ:', err.message);
+          return resolve({});
+        }
+        const byGarage = {};
+        rows.forEach((r) => {
+          (byGarage[r.garage_id] = byGarage[r.garage_id] || []).push({
+            category: r.category,
+            name: r.name,
+            priceMin: r.price_min || '',
+            priceMax: r.price_max || '',
+            details: r.details || '',
+            active: r.active !== false,
+          });
+        });
+        resolve(byGarage);
+      }
+    );
+  });
+}
+
+// แทนที่รายการบริการทั้งหมดของอู่ (ลบของเดิมแล้วใส่ชุดใหม่ที่ส่งมา) — services เป็น array จากแอป
+// (รองรับข้อมูลรูปแบบเก่าที่เป็นข้อความล้วนด้วย)
+function replaceGarageServices(garageId, services, done) {
+  const list = Array.isArray(services) ? services : [];
+  const rows = list
+    .map((it, i) => {
+      const o = it && typeof it === 'object' ? it : { name: String(it || '') };
+      const name = String(o.name || '').trim().slice(0, 255);
+      if (!name) return null;
+      return [
+        garageId,
+        String(o.category || 'อื่นๆ').slice(0, 100),
+        name,
+        String(o.priceMin !== undefined ? o.priceMin : (o.price || '')).slice(0, 50),
+        String(o.priceMax || '').slice(0, 50),
+        String(o.details || ''),
+        o.active === false ? false : true,
+        i,
+      ];
+    })
+    .filter(Boolean);
+
+  db.query('DELETE FROM garage_services WHERE garage_id = ?', [garageId], (delErr) => {
+    if (delErr) return done(delErr);
+    if (rows.length === 0) return done(null);
+    const ph = rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const params = [];
+    rows.forEach((r) => params.push(...r));
+    db.query(
+      `INSERT INTO garage_services (garage_id, category, name, price_min, price_max, details, active, sort_order)
+       VALUES ${ph}`,
+      params,
+      (insErr) => done(insErr || null)
+    );
+  });
+}
+
 // ✅ ระบบ wallet + หักค่าคอมมิชชั่นแบบ Grab-style (แทนที่ระบบสมุดบัญชีเดิม)
 // ต้อง mount ตรงนี้ (หลัง dbPool ถูกประกาศแล้วเท่านั้น) — เดิมวางไว้ก่อนหน้านี้
 // (ตอน uploadSlip/toImageUrl เพิ่งถูกประกาศ) ทำให้เรียกใช้ dbPool ก่อนมันจะถูก
@@ -420,7 +492,7 @@ app.post('/api/auth/login', (req, res) => {
             c.avatar AS cust_avatar, c.latitude AS cust_latitude, c.longitude AS cust_longitude,
             g.shop_name AS garage_shop_name, g.owner_name AS garage_owner_name, g.phone AS garage_phone,
             g.address AS garage_address, g.avatar AS garage_avatar, g.hours_weekday AS garage_hours_weekday,
-            g.hours_weekend AS garage_hours_weekend, g.services AS garage_services,
+            g.hours_weekend AS garage_hours_weekend,
             g.latitude AS garage_latitude, g.longitude AS garage_longitude,
             g.bank_name AS garage_bank_name, g.bank_account_number AS garage_bank_account_number,
             g.bank_account_name AS garage_bank_account_name, g.promptpay_id AS garage_promptpay_id,
@@ -558,7 +630,7 @@ app.post('/api/auth/login', (req, res) => {
           avatar: user.garage_avatar,
           hours_weekday: user.garage_hours_weekday,
           hours_weekend: user.garage_hours_weekend,
-          services: user.garage_services,
+          services: [],
           latitude: user.garage_latitude,
           longitude: user.garage_longitude,
           // ✅ แก้บั๊ก: เดิม login ไม่ส่งข้อมูลบัญชีธนาคารกลับมาเลยสักครั้ง ทำให้
@@ -570,14 +642,9 @@ app.post('/api/auth/login', (req, res) => {
           promptpay_id: user.garage_promptpay_id,
         };
 
-        // services เก็บเป็น JSON string ใน DB -> แปลงกลับเป็น array ก่อนส่งให้ Flutter
-        if (profile.services) {
-          try {
-            profile.services = JSON.parse(profile.services);
-          } catch (e) {
-            profile.services = [];
-          }
-        }
+        // บริการของอู่ดึงจากตาราง garage_services (แยกแถวละบริการ) แล้วประกอบเป็น array เหมือนเดิม
+        const svcMap = await fetchGarageServices([user.garage_row_id]);
+        profile.services = svcMap[user.garage_row_id] || [];
       }
 
       // ✅ แปลงเป็น URL เต็มด้วย IP ปัจจุบันเสมอ (ใช้ได้ทั้งข้อมูลเก่า/ใหม่)
@@ -630,14 +697,10 @@ app.put('/api/user/update', (req, res) => {
       }
     );
   } else if (userType === 'repair') {
-    // services ส่งมาเป็น array จาก Flutter (List<String> หรือ List<Map> ที่มี name/price)
-    // -> เก็บเป็น JSON string ในคอลัมน์ TEXT
-    const servicesJson = services !== undefined ? JSON.stringify(services) : null;
-
     db.query(
       `UPDATE garages
        SET shop_name = ?, phone = ?, address = ?,
-           owner_name = ?, hours_weekday = ?, hours_weekend = ?, services = ?,
+           owner_name = ?, hours_weekday = ?, hours_weekend = ?,
            latitude = ?, longitude = ?
        WHERE user_id = ?`,
       [
@@ -647,14 +710,27 @@ app.put('/api/user/update', (req, res) => {
         ownerName ?? null,
         hoursWeekday ?? null,
         hoursWeekend ?? null,
-        servicesJson,
         latitude ?? null,
         longitude ?? null,
         userId,
       ],
       (err) => {
         if (err) return res.json({ success: false, message: 'อัปเดตไม่สำเร็จ: ' + err.message });
-        res.json({ success: true, message: 'บันทึกข้อมูลสำเร็จ' });
+
+        // services ส่งมาเป็น array จาก Flutter -> บันทึกเป็นแถวในตาราง garage_services
+        // (ถ้าไม่ได้ส่ง services มา แปลว่าไม่แก้บริการ — ไม่แตะของเดิม)
+        if (services === undefined) {
+          return res.json({ success: true, message: 'บันทึกข้อมูลสำเร็จ' });
+        }
+        db.query('SELECT id FROM garages WHERE user_id = ?', [userId], (gErr, gRows) => {
+          if (gErr || gRows.length === 0) {
+            return res.json({ success: false, message: 'บันทึกบริการไม่สำเร็จ: ไม่พบอู่' });
+          }
+          replaceGarageServices(gRows[0].id, services, (svcErr) => {
+            if (svcErr) return res.json({ success: false, message: 'บันทึกบริการไม่สำเร็จ: ' + svcErr.message });
+            res.json({ success: true, message: 'บันทึกข้อมูลสำเร็จ' });
+          });
+        });
       }
     );
   }
@@ -692,7 +768,7 @@ app.get('/api/user/profile', (req, res) => {
   // บันทึกไว้แล้วในฐานข้อมูล ผู้ใช้เลยรู้สึกว่าต้องกรอกใหม่ทุกรอบ
   const cols = userType === 'customer'
     ? `${alias}.first_name, ${alias}.last_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.latitude, ${alias}.longitude`
-    : `${alias}.shop_name, ${alias}.owner_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.hours_weekday, ${alias}.hours_weekend, ${alias}.services, ${alias}.latitude, ${alias}.longitude, ${alias}.bank_name, ${alias}.bank_account_number, ${alias}.bank_account_name, ${alias}.promptpay_id`;
+    : `${alias}.shop_name, ${alias}.owner_name, ${alias}.phone, ${alias}.address, ${alias}.avatar, ${alias}.hours_weekday, ${alias}.hours_weekend, ${alias}.id AS garage_row_id, ${alias}.latitude, ${alias}.longitude, ${alias}.bank_name, ${alias}.bank_account_number, ${alias}.bank_account_name, ${alias}.promptpay_id`;
 
   db.query(
     `SELECT ${cols}, u.email
@@ -700,17 +776,15 @@ app.get('/api/user/profile', (req, res) => {
      JOIN users u ON u.id = ${alias}.user_id
      WHERE ${alias}.user_id = ?`,
     [userId],
-    (err, results) => {
+    async (err, results) => {
       if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
       const profile = results[0] || {};
 
-      // services เก็บเป็น JSON string ใน DB -> แปลงกลับเป็น array ก่อนส่งให้ Flutter
-      if (userType !== 'customer' && profile.services) {
-        try {
-          profile.services = JSON.parse(profile.services);
-        } catch (e) {
-          profile.services = [];
-        }
+      // บริการของอู่ดึงจากตาราง garage_services แล้วประกอบเป็น array เหมือนเดิม
+      if (userType !== 'customer') {
+        const svcMap = await fetchGarageServices([profile.garage_row_id]);
+        profile.services = svcMap[profile.garage_row_id] || [];
+        delete profile.garage_row_id;
       }
 
       // ✅ แปลงเป็น URL เต็มด้วย IP ปัจจุบันเสมอ (ใช้ได้ทั้งข้อมูลเก่า/ใหม่)
@@ -813,7 +887,7 @@ app.get('/api/garages', (req, res) => {
   const { service, keyword } = req.query;
 
   let sql = `SELECT g.id, g.user_id, g.shop_name, g.phone, g.address, g.avatar,
-                    g.services, g.hours_weekday, g.hours_weekend,
+                    g.hours_weekday, g.hours_weekend,
                     g.latitude, g.longitude,
                     COALESCE(AVG(rv.rating), 0) AS rating, COUNT(rv.id) AS review_count
              FROM garages g
@@ -825,42 +899,32 @@ app.get('/api/garages', (req, res) => {
   const params = [];
 
   if (service) {
-    // services เก็บเป็น JSON string เช่น [{"category":"ยางและล้อ","name":"ปะยางรถยนต์",...}]
-    // ✅ แก้บั๊ก: เดิมค้นหาจากฟิลด์ "name" (ชื่อบริการเฉพาะที่อู่พิมพ์เองอิสระ เช่น
-    // "ปะยางรถยนต์") ซึ่งแทบไม่มีทางตรงกับ "หมวดบริการ" ที่ลูกค้าเลือกกรอง (เช่น "ยางและล้อ")
-    // เลย ทำให้ลูกค้ากดหมวดบริการแล้วหาอู่ไม่เจอ ทั้งที่อู่เพิ่มบริการหมวดนั้นไว้แล้วจริง
-    // ตอนนี้ค้นหาจากฟิลด์ "category" (หมวดมาตรฐานที่อู่เลือกตอนเพิ่มบริการ) แทน ให้ตรงกับ
-    // ค่าที่ฝั่งลูกค้าใช้กรอง — ใช้ LIKE ค้นหาแบบง่าย (เพียงพอสำหรับสเกลโปรเจกต์นี้)
-    sql += ' AND g.services LIKE ?';
-    params.push(`%"category":"${service}"%`);
+    // กรองตามหมวดบริการ: อู่ต้องมีบริการ "ที่เปิดใช้งาน" ในหมวดนั้น (ตาราง garage_services.category
+    // ตรงกับ kGarageCategories ฝั่ง Flutter) — เดิมใช้ LIKE ไล่หาในข้อความ JSON ตอนนี้ใช้ EXISTS/JOIN ตามปกติ
+    sql += ' AND EXISTS (SELECT 1 FROM garage_services gs WHERE gs.garage_id = g.id AND gs.category = ? AND gs.active = TRUE)';
+    params.push(service);
   }
   if (keyword) {
-    // ✅ แก้บั๊ก: เดิมค้นหาแค่ชื่อร้าน (shop_name) เท่านั้น ทำให้พิมพ์คำอาการ/บริการ เช่น
-    // "ยาง" ในช่องค้นหาแล้วไม่เจออู่ที่เพิ่มบริการเกี่ยวกับยางไว้เลยถ้าชื่อร้านไม่มีคำว่า "ยาง"
-    // ตอนนี้ค้นหาทั้งชื่อร้านและข้อมูลบริการ (services) ด้วย — ครอบคลุมทั้งหมวดบริการ
-    // (category) และชื่อบริการเฉพาะที่อู่พิมพ์เอง (name) เพราะเก็บอยู่ใน JSON blob เดียวกัน
-    sql += ' AND (g.shop_name LIKE ? OR g.services LIKE ?)';
-    params.push(`%${keyword}%`, `%${keyword}%`);
+    // ค้นหาทั้งชื่อร้านและบริการของอู่ (หมวด/ชื่อบริการ/รายละเอียด)
+    sql += ` AND (g.shop_name LIKE ? OR EXISTS (
+               SELECT 1 FROM garage_services gs
+               WHERE gs.garage_id = g.id AND gs.active = TRUE
+                 AND (gs.name LIKE ? OR gs.category LIKE ? OR gs.details LIKE ?)))`;
+    params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
   }
   sql += ' GROUP BY g.id';
 
-  db.query(sql, params, (err, results) => {
+  db.query(sql, params, async (err, results) => {
     if (err) return res.json({ success: false, message: 'เกิดข้อผิดพลาด: ' + err.message });
 
-    const garages = results.map((g) => {
-      let services = [];
-      try {
-        services = g.services ? JSON.parse(g.services) : [];
-      } catch (e) {
-        services = [];
-      }
-      return {
-        ...g,
-        services,
-        avatar: toImageUrl(g.avatar),
-        rating: Number(g.rating),
-      };
-    });
+    // โหลดบริการของทุกอู่ในผลลัพธ์ครั้งเดียว (ตาราง garage_services)
+    const svcMap = await fetchGarageServices(results.map((g) => g.id));
+    const garages = results.map((g) => ({
+      ...g,
+      services: svcMap[g.id] || [],
+      avatar: toImageUrl(g.avatar),
+      rating: Number(g.rating),
+    }));
 
     res.json({ success: true, message: 'ดึงข้อมูลสำเร็จ', data: { garages } });
   });
